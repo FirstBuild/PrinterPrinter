@@ -1,0 +1,336 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+from dataclasses import asdict
+from datetime import UTC, datetime, timedelta
+from typing import AsyncIterator
+
+from fastapi import FastAPI, HTTPException
+
+from printerprinter.bambuddy_client import BambuddyClient
+from printerprinter.config import get_settings
+from printerprinter.logging_config import configure_logging
+from printerprinter.printing import BrotherPrintService
+from printerprinter.storage import (
+    get_print_start_event,
+    init_db,
+    list_recent_print_start_events,
+    record_label_job_attempt,
+    upsert_print_start_event,
+)
+
+
+LOGGER = logging.getLogger(__name__)
+
+
+def _exc_message(exc: Exception) -> str:
+    detail = str(exc).strip()
+    if detail:
+        return detail
+    return exc.__class__.__name__
+
+
+def _is_running_state(state: str) -> bool:
+    return state.upper() in {"RUNNING", "PRINTING", "IN_PROGRESS", "STARTED"}
+
+
+def _parse_monitored_ids(raw: str) -> set[str]:
+    if not raw.strip():
+        return set()
+    return {part.strip() for part in raw.split(",") if part.strip()}
+
+
+def _parse_monitored_identifiers(raw: str) -> set[str]:
+    if not raw.strip():
+        return set()
+    return {part.strip().lower() for part in raw.split(",") if part.strip()}
+
+
+def _resolve_allowed_printer_ids(
+    printers: list,
+    monitored_ids: set[str],
+    monitored_identifiers: set[str],
+) -> set[str]:
+    allowed = set(monitored_ids)
+    if not monitored_identifiers:
+        return allowed
+
+    for printer in printers:
+        candidates = {printer.printer_id.lower()}
+        if printer.name:
+            candidates.add(printer.name.lower())
+        if printer.serial_number:
+            candidates.add(printer.serial_number.lower())
+        if printer.ip_address:
+            candidates.add(printer.ip_address.lower())
+
+        if candidates.intersection(monitored_identifiers):
+            allowed.add(printer.printer_id)
+
+    return allowed
+
+
+async def run_poll_iteration(
+    client: BambuddyClient,
+    db_path: str,
+    monitored_ids: set[str],
+    monitored_identifiers: set[str],
+    last_states: dict[str, str],
+    print_service: BrotherPrintService,
+) -> dict[str, int]:
+    printers = await client.list_printers()
+    allowed_ids = _resolve_allowed_printer_ids(printers, monitored_ids, monitored_identifiers)
+    seen = 0
+    inserted = 0
+
+    for printer in printers:
+        if allowed_ids and printer.printer_id not in allowed_ids:
+            continue
+
+        status = await client.get_printer_status(printer.printer_id)
+        state = str(status.get("state") or "").upper()
+        previous = last_states.get(printer.printer_id, "")
+        last_states[printer.printer_id] = state
+        seen += 1
+
+        if not _is_running_state(state) or _is_running_state(previous):
+            continue
+
+        now = datetime.now(UTC)
+        file_name = status.get("subtask_name") or status.get("current_print") or status.get("gcode_file")
+        remaining = status.get("remaining_time")
+        remaining_seconds = int(remaining) if isinstance(remaining, (int, float)) else None
+        eta_end_at = None
+        if remaining_seconds is not None:
+            eta_end_at = (now + timedelta(seconds=remaining_seconds)).isoformat()
+
+        source_event_id = f"{printer.printer_id}:{file_name or 'unknown'}:{int(now.timestamp())}"
+        result = upsert_print_start_event(
+            db_path,
+            source="bambuddy",
+            source_event_id=source_event_id,
+            printer_id=printer.printer_id,
+            printer_name=printer.name,
+            file_name=str(file_name) if file_name is not None else None,
+            started_at=now.isoformat(),
+            eta_end_at=eta_end_at,
+            est_duration_sec=remaining_seconds,
+            filament_estimated_g=None,
+        )
+        if result["inserted"]:
+            inserted += 1
+            print_result = await asyncio.to_thread(print_service.print_event, result["event"])
+            status = "printed" if print_result.ok else "failed"
+            record_label_job_attempt(
+                db_path,
+                event_id=int(result["event"]["id"]),
+                status=status,
+                attempts=1,
+                error_message=print_result.error,
+            )
+
+    return {"seen": seen, "inserted": inserted}
+
+
+async def poller_loop(
+    client: BambuddyClient,
+    db_path: str,
+    interval_seconds: float,
+    monitored_ids: set[str],
+    monitored_identifiers: set[str],
+    last_states: dict[str, str],
+    print_service: BrotherPrintService,
+) -> None:
+    while True:
+        try:
+            outcome = await run_poll_iteration(
+                client,
+                db_path,
+                monitored_ids,
+                monitored_identifiers,
+                last_states,
+                print_service,
+            )
+            LOGGER.info("poll iteration complete: seen=%s inserted=%s", outcome["seen"], outcome["inserted"])
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("poll iteration failed: %s", _exc_message(exc))
+        await asyncio.sleep(interval_seconds)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    settings = get_settings()
+    configure_logging(settings.log_level)
+    init_db(settings.db_path)
+
+    client = BambuddyClient(
+        base_url=str(settings.bambuddy_base_url),
+        api_token=settings.bambuddy_api_token,
+        timeout_seconds=settings.bambuddy_timeout_seconds,
+        auth_mode=settings.bambuddy_auth_mode,
+        auth_header_name=settings.bambuddy_auth_header_name,
+        jobs_endpoint=settings.bambuddy_jobs_endpoint,
+        printers_endpoint=settings.bambuddy_printers_endpoint,
+        printer_status_endpoint_template=settings.printer_status_endpoint_template,
+    )
+    monitored_ids = _parse_monitored_ids(settings.monitored_printer_ids)
+    monitored_identifiers = _parse_monitored_identifiers(settings.monitored_printer_identifiers)
+    last_states: dict[str, str] = {}
+    print_service = BrotherPrintService(
+        enabled=settings.brother_enabled,
+        model=settings.brother_model,
+        printer_uri=settings.brother_printer_uri,
+        label_size=settings.brother_label_size,
+        cut=settings.brother_cut,
+        show_price=settings.show_price_on_label,
+        price_per_gram=settings.filament_price_per_gram,
+    )
+
+    app.state.print_service = print_service
+    app.state.db_path = settings.db_path
+
+    poller_task = asyncio.create_task(
+        poller_loop(
+            client,
+            settings.db_path,
+            settings.poll_interval_seconds,
+            monitored_ids,
+            monitored_identifiers,
+            last_states,
+            print_service,
+        ),
+        name="bambuddy-poller",
+    )
+    yield
+    poller_task.cancel()
+    try:
+        await poller_task
+    except asyncio.CancelledError:
+        pass
+
+
+app = FastAPI(title="PrinterPrinter", version="0.1.0", lifespan=lifespan)
+
+
+@app.get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/probes/bambuddy")
+async def probe_bambuddy() -> dict[str, object]:
+    settings = get_settings()
+    client = BambuddyClient(
+        base_url=str(settings.bambuddy_base_url),
+        api_token=settings.bambuddy_api_token,
+        timeout_seconds=settings.bambuddy_timeout_seconds,
+        auth_mode=settings.bambuddy_auth_mode,
+        auth_header_name=settings.bambuddy_auth_header_name,
+        jobs_endpoint=settings.bambuddy_jobs_endpoint,
+        printers_endpoint=settings.bambuddy_printers_endpoint,
+        printer_status_endpoint_template=settings.printer_status_endpoint_template,
+    )
+    result = await client.probe()
+    return asdict(result)
+
+
+@app.post("/admin/poll-once")
+async def admin_poll_once() -> dict[str, int]:
+    settings = get_settings()
+    client = BambuddyClient(
+        base_url=str(settings.bambuddy_base_url),
+        api_token=settings.bambuddy_api_token,
+        timeout_seconds=settings.bambuddy_timeout_seconds,
+        auth_mode=settings.bambuddy_auth_mode,
+        auth_header_name=settings.bambuddy_auth_header_name,
+        jobs_endpoint=settings.bambuddy_jobs_endpoint,
+        printers_endpoint=settings.bambuddy_printers_endpoint,
+        printer_status_endpoint_template=settings.printer_status_endpoint_template,
+    )
+    monitored_ids = _parse_monitored_ids(settings.monitored_printer_ids)
+    monitored_identifiers = _parse_monitored_identifiers(settings.monitored_printer_identifiers)
+    state_cache: dict[str, str] = {}
+    print_service = BrotherPrintService(
+        enabled=settings.brother_enabled,
+        model=settings.brother_model,
+        printer_uri=settings.brother_printer_uri,
+        label_size=settings.brother_label_size,
+        cut=settings.brother_cut,
+        show_price=settings.show_price_on_label,
+        price_per_gram=settings.filament_price_per_gram,
+    )
+    try:
+        return await run_poll_iteration(
+            client,
+            settings.db_path,
+            monitored_ids,
+            monitored_identifiers,
+            state_cache,
+            print_service,
+        )
+    except Exception as exc:  # noqa: BLE001
+        msg = _exc_message(exc)
+        LOGGER.warning("manual poll failed: %s", msg)
+        raise HTTPException(status_code=502, detail=f"Bambuddy poll failed: {msg}") from exc
+
+
+@app.get("/admin/printers")
+async def admin_printers() -> dict[str, object]:
+    settings = get_settings()
+    client = BambuddyClient(
+        base_url=str(settings.bambuddy_base_url),
+        api_token=settings.bambuddy_api_token,
+        timeout_seconds=settings.bambuddy_timeout_seconds,
+        auth_mode=settings.bambuddy_auth_mode,
+        auth_header_name=settings.bambuddy_auth_header_name,
+        jobs_endpoint=settings.bambuddy_jobs_endpoint,
+        printers_endpoint=settings.bambuddy_printers_endpoint,
+        printer_status_endpoint_template=settings.printer_status_endpoint_template,
+    )
+    try:
+        printers = await client.list_printers()
+    except Exception as exc:  # noqa: BLE001
+        msg = _exc_message(exc)
+        LOGGER.warning("list printers failed: %s", msg)
+        raise HTTPException(status_code=502, detail=f"Bambuddy printers lookup failed: {msg}") from exc
+    return {
+        "count": len(printers),
+        "items": [asdict(printer) for printer in printers],
+    }
+
+
+@app.get("/admin/events")
+async def admin_events(limit: int = 50) -> dict[str, object]:
+    settings = get_settings()
+    items = list_recent_print_start_events(settings.db_path, limit=limit)
+    return {"count": len(items), "items": items}
+
+
+@app.post("/admin/print-event/{event_id}")
+async def admin_print_event(event_id: int) -> dict[str, object]:
+    settings = get_settings()
+    event = get_print_start_event(settings.db_path, event_id)
+    if event is None:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    print_service = BrotherPrintService(
+        enabled=settings.brother_enabled,
+        model=settings.brother_model,
+        printer_uri=settings.brother_printer_uri,
+        label_size=settings.brother_label_size,
+        cut=settings.brother_cut,
+        show_price=settings.show_price_on_label,
+        price_per_gram=settings.filament_price_per_gram,
+    )
+    result = await asyncio.to_thread(print_service.print_event, event)
+    status = "printed" if result.ok else "failed"
+    job_id = record_label_job_attempt(
+        settings.db_path,
+        event_id=event_id,
+        status=status,
+        attempts=1,
+        error_message=result.error,
+    )
+    return {"ok": result.ok, "error": result.error, "label_job_id": job_id}

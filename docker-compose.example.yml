@@ -1,0 +1,20 @@
+services:
+  printerprinter:
+    build: .
+    container_name: printerprinter
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8080:8080"
+    # Host networking can simplify access to LAN printers on Linux.
+    # network_mode: host
+
+  # Example only: if Bambuddy runs in the same compose project,
+  # set BAMBUDDY_BASE_URL=http://bambuddy:8000 in .env.
+  # bambuddy:
+  #   image: ghcr.io/<your-org>/bambuddy:latest
+  #   container_name: bambuddy
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8000:8000"
