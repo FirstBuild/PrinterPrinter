@@ -209,6 +209,30 @@ def _normalize_name(value: object | None) -> str:
     return str(value).strip().lower()
 
 
+def _job_enrichment_score(job: object) -> tuple[int, int]:
+    duration = _coerce_int(getattr(job, "est_duration_sec", None))
+    filament = _coerce_float(getattr(job, "filament_estimated_g", None))
+    eta_end_at = getattr(job, "eta_end_at", None)
+    started_at = getattr(job, "started_at", None)
+
+    score = 0
+    if duration is not None and duration > 0:
+        score += 4
+    if filament is not None and filament >= 0:
+        score += 4
+    if eta_end_at:
+        score += 2
+    if started_at:
+        score += 1
+
+    # Very short durations with no filament are often transient "time remaining" values.
+    if duration is not None and duration < 600 and filament is None:
+        score -= 2
+
+    source_event_id = _coerce_int(getattr(job, "source_event_id", None)) or -1
+    return (score, source_event_id)
+
+
 def _pick_running_job_fields(
     jobs: list,
     *,
@@ -217,29 +241,29 @@ def _pick_running_job_fields(
 ) -> dict[str, object | None]:
     normalized_printer_id = _normalize_name(printer_id)
     normalized_file_name = _normalize_name(file_name)
-    fallback: object | None = None
+    candidates: list[object] = []
 
     for job in jobs:
         job_printer_id = _normalize_name(getattr(job, "printer_id", None))
         if job_printer_id != normalized_printer_id:
             continue
 
-        if fallback is None:
-            fallback = job
-
         job_file_name = _normalize_name(getattr(job, "file_name", None))
-        if normalized_file_name and job_file_name == normalized_file_name:
-            fallback = job
-            break
+        if normalized_file_name and job_file_name and job_file_name != normalized_file_name:
+            continue
 
-    if fallback is None:
+        candidates.append(job)
+
+    if not candidates:
         return {}
 
+    best_job = max(candidates, key=_job_enrichment_score)
+
     return {
-        "started_at": getattr(fallback, "started_at", None),
-        "eta_end_at": getattr(fallback, "eta_end_at", None),
-        "est_duration_sec": getattr(fallback, "est_duration_sec", None),
-        "filament_estimated_g": getattr(fallback, "filament_estimated_g", None),
+        "started_at": getattr(best_job, "started_at", None),
+        "eta_end_at": getattr(best_job, "eta_end_at", None),
+        "est_duration_sec": getattr(best_job, "est_duration_sec", None),
+        "filament_estimated_g": getattr(best_job, "filament_estimated_g", None),
     }
 
 
@@ -292,8 +316,11 @@ def _job_matches_event(job, event: dict[str, object]) -> bool:
 
     event_file_name = _normalize_name(event.get("file_name"))
     job_file_name = _normalize_name(getattr(job, "file_name", None))
-    if event_file_name and job_file_name:
+    if event_file_name:
         return event_file_name == job_file_name
+
+    if job_file_name:
+        return False
 
     return True
 
@@ -317,9 +344,11 @@ async def reconcile_recent_events(client: BambuddyClient, db_path: str) -> int:
 
     updates = 0
     for event in targets:
-        matched_job = next((job for job in jobs if _job_matches_event(job, event)), None)
-        if matched_job is None:
+        matched_jobs = [job for job in jobs if _job_matches_event(job, event)]
+        if not matched_jobs:
             continue
+
+        matched_job = max(matched_jobs, key=_job_enrichment_score)
 
         new_started_at = getattr(matched_job, "started_at", None) or event.get("started_at")
         new_eta_end_at = getattr(matched_job, "eta_end_at", None) or event.get("eta_end_at")
