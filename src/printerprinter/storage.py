@@ -117,46 +117,46 @@ def list_recent_print_start_events(db_path: str, limit: int = 50) -> list[dict[s
     return [dict(row) for row in rows]
 
 
-    def update_print_start_event(
-        db_path: str,
-        *,
-        event_id: int,
-        started_at: str | None = None,
-        eta_end_at: str | None = None,
-        est_duration_sec: int | None = None,
-        filament_estimated_g: float | None = None,
-    ) -> bool:
-        assignments: list[str] = []
-        values: list[Any] = []
+def update_print_start_event(
+    db_path: str,
+    *,
+    event_id: int,
+    started_at: str | None = None,
+    eta_end_at: str | None = None,
+    est_duration_sec: int | None = None,
+    filament_estimated_g: float | None = None,
+) -> bool:
+    assignments: list[str] = []
+    values: list[Any] = []
 
-        if started_at is not None:
-            assignments.append("started_at = ?")
-            values.append(started_at)
-        if eta_end_at is not None:
-            assignments.append("eta_end_at = ?")
-            values.append(eta_end_at)
-        if est_duration_sec is not None:
-            assignments.append("est_duration_sec = ?")
-            values.append(est_duration_sec)
-        if filament_estimated_g is not None:
-            assignments.append("filament_estimated_g = ?")
-            values.append(filament_estimated_g)
+    if started_at is not None:
+        assignments.append("started_at = ?")
+        values.append(started_at)
+    if eta_end_at is not None:
+        assignments.append("eta_end_at = ?")
+        values.append(eta_end_at)
+    if est_duration_sec is not None:
+        assignments.append("est_duration_sec = ?")
+        values.append(est_duration_sec)
+    if filament_estimated_g is not None:
+        assignments.append("filament_estimated_g = ?")
+        values.append(filament_estimated_g)
 
-        if not assignments:
-            return False
+    if not assignments:
+        return False
 
-        values.append(event_id)
-        with sqlite3.connect(db_path) as conn:
-            cur = conn.execute(
-                f"""
-                UPDATE print_start_events
-                SET {', '.join(assignments)}
-                WHERE id = ?;
-                """,
-                values,
-            )
-            conn.commit()
-            return cur.rowcount > 0
+    values.append(event_id)
+    with sqlite3.connect(db_path) as conn:
+        cur = conn.execute(
+            f"""
+            UPDATE print_start_events
+            SET {', '.join(assignments)}
+            WHERE id = ?;
+            """,
+            values,
+        )
+        conn.commit()
+        return cur.rowcount > 0
 
 
 def get_print_start_event(db_path: str, event_id: int) -> dict[str, Any] | None:
