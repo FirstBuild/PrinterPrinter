@@ -206,6 +206,9 @@ gather_configuration() {
 setup_repository() {
     print_header "Setting Up Repository"
     
+    # Ensure we're in a valid working directory (in case the install dir was deleted)
+    cd /tmp || exit 1
+    
     if detect_existing_installation; then
         print_info "Updating existing installation at $INSTALL_DIR"
         cd "$INSTALL_DIR"
