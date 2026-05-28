@@ -182,13 +182,23 @@ gather_configuration() {
     
     # Pricing Configuration
     print_info "Pricing Configuration"
-    if prompt_yes_no "Show price on labels?"; then
-        SHOW_PRICE="true"
-        PRICE_PER_GRAM=$(prompt_for_value "Price per gram in USD" "0.10")
-    else
-        SHOW_PRICE="false"
-        PRICE_PER_GRAM="0.10"
-    fi
+    read -p "$(echo -e ${BLUE}?)$(echo -e ${NC}) Show price on labels? [Y/n]: " price_response
+    price_response="${price_response:-y}"  # Default to 'yes' if user just presses enter
+    case "$price_response" in
+        [yY]) 
+            SHOW_PRICE="true"
+            PRICE_PER_GRAM=$(prompt_for_value "Price per gram in USD" "0.10")
+            ;;
+        [nN]) 
+            SHOW_PRICE="false"
+            PRICE_PER_GRAM="0.10"
+            ;;
+        *) 
+            print_warning "Invalid response, assuming yes"
+            SHOW_PRICE="true"
+            PRICE_PER_GRAM=$(prompt_for_value "Price per gram in USD" "0.10")
+            ;;
+    esac
     
     print_success "Configuration complete"
 }
@@ -317,11 +327,12 @@ Type=simple
 User=root
 WorkingDirectory=$INSTALL_DIR
 Environment="PATH=$VENV_DIR/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-ExecStart=$VENV_DIR/bin/python -m printerprinter.main
+ExecStart=$VENV_DIR/bin/uvicorn printerprinter.main:app --host 0.0.0.0 --port 8080
 Restart=always
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
+StandardInput=null
 
 [Install]
 WantedBy=multi-user.target
