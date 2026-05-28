@@ -298,7 +298,7 @@ SHOW_PRICE_ON_LABEL=$SHOW_PRICE
 FILAMENT_PRICE_PER_GRAM=$PRICE_PER_GRAM
 EOF
     
-    chmod 600 "$env_file"
+    chmod 644 "$env_file"
     print_success "Configuration file created at $env_file"
 }
 
