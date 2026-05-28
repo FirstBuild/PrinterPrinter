@@ -176,7 +176,7 @@ gather_configuration() {
     
     # Brother Printer Configuration
     print_info "Brother Label Printer Configuration"
-    BROTHER_PRINTER_IP=$(prompt_for_value "Brother printer IP address" "10.206.58.111")
+    BROTHER_PRINTER_IP=$(prompt_for_value "Brother printer IP address")
     
     LABEL_SIZE=$(prompt_for_value "Label size (e.g., 62x100, 62x29)" "62x100")
     
@@ -268,14 +268,22 @@ PRINTERPRINTER_POLL_INTERVAL_SECONDS=5
 # Printer Selection (comma-separated identifiers)
 PRINTERPRINTER_MONITORED_PRINTER_IDENTIFIERS=$PRINTER_IDENTIFIERS
 
+# ========================================
 # Brother Label Printer Configuration
+# ========================================
 BROTHER_ENABLED=true
 BROTHER_MODEL=QL-820NWB
+
+# Brother printer IP and port (e.g., tcp://192.168.1.100:9100)
 BROTHER_PRINTER_URI=tcp://$BROTHER_PRINTER_IP:9100
+
+# Label configuration
 BROTHER_LABEL_SIZE=$LABEL_SIZE
 BROTHER_CUT=true
 
+# ========================================
 # Pricing Configuration
+# ========================================
 SHOW_PRICE_ON_LABEL=$SHOW_PRICE
 FILAMENT_PRICE_PER_GRAM=$PRICE_PER_GRAM
 EOF
