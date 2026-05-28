@@ -112,6 +112,8 @@ curl http://localhost:8080/admin/events
 
 Run the setup script to fully set up PrinterPrinter with interactive configuration prompts. Choose one of the methods below:
 
+If an existing `.env` is present, the installer will show the current values first and let you keep them to skip the prompts.
+
 **Method 1: Pipe directly to bash (requires bash 4.1+, use Method 2 if this fails)**
 
 ```bash

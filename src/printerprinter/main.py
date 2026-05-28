@@ -48,6 +48,220 @@ def _parse_monitored_identifiers(raw: str) -> set[str]:
     return {part.strip().lower() for part in raw.split(",") if part.strip()}
 
 
+def _coerce_int(value: object | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_float(value: object | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_iso8601(value: object | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(float(value), tz=UTC).isoformat()
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    try:
+        numeric = float(text)
+        return datetime.fromtimestamp(numeric, tz=UTC).isoformat()
+    except ValueError:
+        pass
+
+    normalized = text.replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(normalized)
+    except ValueError:
+        return text
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.isoformat()
+
+
+def _get_status_value(status: dict[str, object], keys: tuple[str, ...]) -> object | None:
+    for key in keys:
+        value = status.get(key)
+        if value not in (None, ""):
+            return value
+
+    for container_key in ("job", "print", "data"):
+        nested = status.get(container_key)
+        if not isinstance(nested, dict):
+            continue
+        for key in keys:
+            value = nested.get(key)
+            if value not in (None, ""):
+                return value
+
+    return None
+
+
+def _extract_event_fields_from_status(status: dict[str, object], now: datetime) -> dict[str, object | None]:
+    started_at = _to_iso8601(
+        _get_status_value(
+            status,
+            ("started_at", "start_time", "gcode_start_time", "print_start_time", "job_started_at"),
+        )
+    )
+    if started_at is None:
+        started_at = now.isoformat()
+
+    remaining_seconds = _coerce_int(
+        _get_status_value(
+            status,
+            ("remaining_time", "remaining_seconds", "eta_seconds", "time_left", "mc_remaining_time"),
+        )
+    )
+
+    duration_seconds = _coerce_int(
+        _get_status_value(
+            status,
+            (
+                "est_duration_sec",
+                "estimated_duration",
+                "duration_seconds",
+                "total_duration",
+                "estimated_total_time",
+            ),
+        )
+    )
+    elapsed_seconds = _coerce_int(
+        _get_status_value(status, ("elapsed_time", "print_time", "mc_print_time", "elapsed_seconds"))
+    )
+    if duration_seconds is None and remaining_seconds is not None and elapsed_seconds is not None:
+        duration_seconds = remaining_seconds + elapsed_seconds
+
+    filament_grams = _coerce_float(
+        _get_status_value(
+            status,
+            (
+                "filament_estimated_g",
+                "filament_grams",
+                "filament_used_g",
+                "total_filament_g",
+                "weight",
+            ),
+        )
+    )
+
+    eta_end_at = _to_iso8601(
+        _get_status_value(
+            status,
+            (
+                "eta_end_at",
+                "estimated_end_time",
+                "eta",
+                "end_time",
+                "estimated_finish_time",
+            ),
+        )
+    )
+    if eta_end_at is None and remaining_seconds is not None:
+        eta_end_at = (now + timedelta(seconds=remaining_seconds)).isoformat()
+
+    return {
+        "started_at": started_at,
+        "eta_end_at": eta_end_at,
+        "est_duration_sec": duration_seconds,
+        "filament_estimated_g": filament_grams,
+    }
+
+
+def _needs_enrichment(fields: dict[str, object | None]) -> bool:
+    return any(
+        fields.get(key) is None
+        for key in ("eta_end_at", "est_duration_sec", "filament_estimated_g")
+    )
+
+
+def _normalize_name(value: object | None) -> str:
+    if value is None:
+        return ""
+    return str(value).strip().lower()
+
+
+def _pick_running_job_fields(
+    jobs: list,
+    *,
+    printer_id: str,
+    file_name: object | None,
+) -> dict[str, object | None]:
+    normalized_printer_id = _normalize_name(printer_id)
+    normalized_file_name = _normalize_name(file_name)
+    fallback: object | None = None
+
+    for job in jobs:
+        job_printer_id = _normalize_name(getattr(job, "printer_id", None))
+        if job_printer_id != normalized_printer_id:
+            continue
+
+        if fallback is None:
+            fallback = job
+
+        job_file_name = _normalize_name(getattr(job, "file_name", None))
+        if normalized_file_name and job_file_name == normalized_file_name:
+            fallback = job
+            break
+
+    if fallback is None:
+        return {}
+
+    return {
+        "started_at": getattr(fallback, "started_at", None),
+        "eta_end_at": getattr(fallback, "eta_end_at", None),
+        "est_duration_sec": getattr(fallback, "est_duration_sec", None),
+        "filament_estimated_g": getattr(fallback, "filament_estimated_g", None),
+    }
+
+
+async def _build_event_fields(
+    client: BambuddyClient,
+    *,
+    printer_id: str,
+    file_name: object | None,
+    initial_status: dict[str, object],
+    now: datetime,
+) -> dict[str, object | None]:
+    fields = _extract_event_fields_from_status(initial_status, now)
+
+    for _ in range(3):
+        if not _needs_enrichment(fields):
+            break
+        await asyncio.sleep(1.5)
+        refreshed_status = await client.get_printer_status(printer_id)
+        refreshed_fields = _extract_event_fields_from_status(refreshed_status, now)
+        for key, value in refreshed_fields.items():
+            if fields.get(key) is None and value is not None:
+                fields[key] = value
+
+    if _needs_enrichment(fields):
+        try:
+            jobs = await client.list_running_jobs()
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.debug("running-jobs enrichment failed: %s", _exc_message(exc))
+        else:
+            job_fields = _pick_running_job_fields(jobs, printer_id=printer_id, file_name=file_name)
+            for key, value in job_fields.items():
+                if fields.get(key) is None and value is not None:
+                    fields[key] = value
+
+    return fields
+
+
 def _resolve_allowed_printer_ids(
     printers: list,
     monitored_ids: set[str],
@@ -100,11 +314,13 @@ async def run_poll_iteration(
 
         now = datetime.now(UTC)
         file_name = status.get("subtask_name") or status.get("current_print") or status.get("gcode_file")
-        remaining = status.get("remaining_time")
-        remaining_seconds = int(remaining) if isinstance(remaining, (int, float)) else None
-        eta_end_at = None
-        if remaining_seconds is not None:
-            eta_end_at = (now + timedelta(seconds=remaining_seconds)).isoformat()
+        event_fields = await _build_event_fields(
+            client,
+            printer_id=printer.printer_id,
+            file_name=file_name,
+            initial_status=status,
+            now=now,
+        )
 
         source_event_id = f"{printer.printer_id}:{file_name or 'unknown'}:{int(now.timestamp())}"
         result = upsert_print_start_event(
@@ -114,10 +330,12 @@ async def run_poll_iteration(
             printer_id=printer.printer_id,
             printer_name=printer.name,
             file_name=str(file_name) if file_name is not None else None,
-            started_at=now.isoformat(),
-            eta_end_at=eta_end_at,
-            est_duration_sec=remaining_seconds,
-            filament_estimated_g=None,
+            started_at=(
+                str(event_fields.get("started_at")) if event_fields.get("started_at") is not None else now.isoformat()
+            ),
+            eta_end_at=(str(event_fields.get("eta_end_at")) if event_fields.get("eta_end_at") is not None else None),
+            est_duration_sec=_coerce_int(event_fields.get("est_duration_sec")),
+            filament_estimated_g=_coerce_float(event_fields.get("filament_estimated_g")),
         )
         if result["inserted"]:
             inserted += 1

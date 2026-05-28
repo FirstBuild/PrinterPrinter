@@ -158,6 +158,46 @@ detect_existing_installation() {
     fi
 }
 
+load_existing_configuration() {
+    local env_file="$INSTALL_DIR/.env"
+
+    if [ ! -f "$env_file" ]; then
+        return 1
+    fi
+
+    # shellcheck disable=SC1090
+    source "$env_file"
+}
+
+mask_secret() {
+    local value="$1"
+
+    if [ -z "$value" ]; then
+        echo "(empty)"
+        return
+    fi
+
+    if [ ${#value} -le 8 ]; then
+        echo "****"
+        return
+    fi
+
+    echo "${value:0:4}****${value: -4}"
+}
+
+show_existing_configuration() {
+    print_header "Existing Configuration"
+    print_info "Review the current .env values below."
+    echo "Bambuddy base URL: ${BAMBUDDY_BASE_URL:-unknown}"
+    echo "Bambuddy API token: $(mask_secret "${BAMBUDDY_API_TOKEN:-}")"
+    echo "Printer identifiers: ${PRINTERPRINTER_MONITORED_PRINTER_IDENTIFIERS:-all printers}"
+    echo "Brother printer URI: ${BROTHER_PRINTER_URI:-unknown}"
+    echo "Brother label size: ${BROTHER_LABEL_SIZE:-unknown}"
+    echo "Show price on label: ${SHOW_PRICE_ON_LABEL:-unknown}"
+    echo "Filament price per gram: ${FILAMENT_PRICE_PER_GRAM:-unknown}"
+    echo ""
+}
+
 gather_configuration() {
     print_header "PrinterPrinter Configuration"
     print_info "Please provide the following configuration details:"
@@ -447,16 +487,20 @@ main() {
     
     if detect_existing_installation; then
         print_warning "PrinterPrinter is already installed at $INSTALL_DIR"
-        if ! prompt_yes_no "Do you want to reconfigure the existing installation?"; then
-            print_info "Using existing configuration"
+        load_existing_configuration
+        show_existing_configuration
+
+        if prompt_yes_no "Keep this configuration and skip the setup prompts?"; then
+            print_info "Using existing configuration from .env"
             setup_repository
+            create_data_directory
             setup_python_environment
-            
-            if prompt_yes_no "Restart the service?"; then
+
+            if prompt_yes_no "Restart the service now?"; then
                 systemctl restart "$SERVICE_NAME"
                 print_success "Service restarted"
             fi
-            
+
             verify_installation
             show_next_steps
             exit 0

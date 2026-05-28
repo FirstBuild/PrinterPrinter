@@ -20,7 +20,7 @@ def _format_duration(value: object | None) -> str:
         return "Unknown"
 
     if total_seconds <= 0:
-        return "0m"
+        return "Unknown"
 
     days = total_seconds // 86400
     remaining = total_seconds % 86400
