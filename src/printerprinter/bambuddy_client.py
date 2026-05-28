@@ -95,6 +95,25 @@ class BambuddyClient:
             headers["Authorization"] = f"Bearer {self._api_token}"
         return headers
 
+    def _headers_for_mode(self, mode: str) -> dict[str, str]:
+        headers = {"Accept": "application/json"}
+        normalized = mode.lower().strip()
+        if normalized == "api_key_header":
+            headers[self._auth_header_name] = self._api_token
+        elif normalized == "none":
+            pass
+        else:
+            headers["Authorization"] = f"Bearer {self._api_token}"
+        return headers
+
+    def _auth_attempt_order(self) -> list[str]:
+        configured = self._auth_mode
+        attempts = [configured]
+        for candidate in ("api_key_header", "bearer"):
+            if candidate not in attempts:
+                attempts.append(candidate)
+        return attempts
+
     async def probe(self) -> ProbeResult:
         # We intentionally probe the root endpoint because concrete Bambuddy API paths
         # will be finalized in the next milestone after endpoint discovery.
@@ -192,11 +211,26 @@ class BambuddyClient:
         return jobs
 
     async def list_print_jobs(self) -> list[BambuddyPrintJob]:
-        headers = self._headers()
+        last_auth_error: httpx.HTTPStatusError | None = None
         async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
-            response = await client.get(f"{self._base_url}{self._jobs_endpoint}", headers=headers)
-            response.raise_for_status()
-        return self._parse_jobs(response.json())
+            for mode in self._auth_attempt_order():
+                response = await client.get(
+                    f"{self._base_url}{self._jobs_endpoint}",
+                    headers=self._headers_for_mode(mode),
+                )
+                if response.status_code in (401, 403):
+                    try:
+                        response.raise_for_status()
+                    except httpx.HTTPStatusError as exc:
+                        last_auth_error = exc
+                    continue
+
+                response.raise_for_status()
+                return self._parse_jobs(response.json())
+
+        if last_auth_error is not None:
+            raise last_auth_error
+        return []
 
     async def list_running_jobs(self) -> list[BambuddyPrintJob]:
         jobs = await self.list_print_jobs()
