@@ -106,13 +106,7 @@ class BambuddyClient:
         except Exception as exc:  # noqa: BLE001
             return ProbeResult(ok=False, status_code=None, error=str(exc))
 
-    async def list_running_jobs(self) -> list[BambuddyPrintJob]:
-        headers = self._headers()
-        async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
-            response = await client.get(f"{self._base_url}{self._jobs_endpoint}", headers=headers)
-            response.raise_for_status()
-
-        data = response.json()
+    def _parse_jobs(self, data: object) -> list[BambuddyPrintJob]:
         if isinstance(data, list):
             items = data
         elif isinstance(data, dict):
@@ -128,10 +122,6 @@ class BambuddyClient:
         jobs: list[BambuddyPrintJob] = []
         for item in items:
             if not isinstance(item, dict):
-                continue
-
-            state = str(item.get("status") or item.get("state") or "").lower()
-            if state and state not in {"running", "printing", "in_progress", "started"}:
                 continue
 
             source_event_id = str(
@@ -173,6 +163,17 @@ class BambuddyClient:
                 )
             )
         return jobs
+
+    async def list_print_jobs(self) -> list[BambuddyPrintJob]:
+        headers = self._headers()
+        async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
+            response = await client.get(f"{self._base_url}{self._jobs_endpoint}", headers=headers)
+            response.raise_for_status()
+        return self._parse_jobs(response.json())
+
+    async def list_running_jobs(self) -> list[BambuddyPrintJob]:
+        jobs = await self.list_print_jobs()
+        return [job for job in jobs if job.source_event_id]
 
     async def list_printers(self) -> list[BambuddyPrinter]:
         headers = self._headers()

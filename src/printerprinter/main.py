@@ -18,6 +18,7 @@ from printerprinter.storage import (
     init_db,
     list_recent_print_start_events,
     record_label_job_attempt,
+    update_print_start_event,
     upsert_print_start_event,
 )
 
@@ -144,6 +145,8 @@ def _extract_event_fields_from_status(status: dict[str, object], now: datetime) 
     )
     if duration_seconds is None and remaining_seconds is not None and elapsed_seconds is not None:
         duration_seconds = remaining_seconds + elapsed_seconds
+    if duration_seconds is not None and duration_seconds <= 0:
+        duration_seconds = None
 
     filament_grams = _coerce_float(
         _get_status_value(
@@ -157,6 +160,8 @@ def _extract_event_fields_from_status(status: dict[str, object], now: datetime) 
             ),
         )
     )
+    if filament_grams is not None and filament_grams < 0:
+        filament_grams = None
 
     eta_end_at = _to_iso8601(
         _get_status_value(
@@ -170,6 +175,8 @@ def _extract_event_fields_from_status(status: dict[str, object], now: datetime) 
             ),
         )
     )
+    if remaining_seconds is not None and remaining_seconds <= 0:
+        remaining_seconds = None
     if eta_end_at is None and remaining_seconds is not None:
         eta_end_at = (now + timedelta(seconds=remaining_seconds)).isoformat()
 
@@ -182,10 +189,18 @@ def _extract_event_fields_from_status(status: dict[str, object], now: datetime) 
 
 
 def _needs_enrichment(fields: dict[str, object | None]) -> bool:
-    return any(
-        fields.get(key) is None
-        for key in ("eta_end_at", "est_duration_sec", "filament_estimated_g")
-    )
+    eta_end_at = fields.get("eta_end_at")
+    started_at = fields.get("started_at")
+    est_duration_sec = _coerce_int(fields.get("est_duration_sec"))
+    filament_estimated_g = _coerce_float(fields.get("filament_estimated_g"))
+
+    if eta_end_at is None or (started_at is not None and eta_end_at == started_at):
+        return True
+    if est_duration_sec is None or est_duration_sec <= 0:
+        return True
+    if filament_estimated_g is None:
+        return True
+    return False
 
 
 def _normalize_name(value: object | None) -> str:
@@ -250,7 +265,7 @@ async def _build_event_fields(
 
     if _needs_enrichment(fields):
         try:
-            jobs = await client.list_running_jobs()
+            jobs = await client.list_print_jobs()
         except Exception as exc:  # noqa: BLE001
             LOGGER.debug("running-jobs enrichment failed: %s", _exc_message(exc))
         else:
@@ -260,6 +275,71 @@ async def _build_event_fields(
                     fields[key] = value
 
     return fields
+
+
+def _event_needs_backfill(event: dict[str, object]) -> bool:
+    return any(
+        event.get(key) in (None, "") or (key == "est_duration_sec" and _coerce_int(event.get(key)) in (None, 0))
+        for key in ("eta_end_at", "est_duration_sec", "filament_estimated_g")
+    )
+
+
+def _job_matches_event(job, event: dict[str, object]) -> bool:
+    job_printer_id = _normalize_name(getattr(job, "printer_id", None))
+    event_printer_id = _normalize_name(event.get("printer_id"))
+    if job_printer_id != event_printer_id:
+        return False
+
+    event_file_name = _normalize_name(event.get("file_name"))
+    job_file_name = _normalize_name(getattr(job, "file_name", None))
+    if event_file_name and job_file_name:
+        return event_file_name == job_file_name
+
+    return True
+
+
+async def reconcile_recent_events(client: BambuddyClient, db_path: str) -> int:
+    try:
+        recent_events = list_recent_print_start_events(db_path, limit=25)
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.debug("recent event lookup failed: %s", _exc_message(exc))
+        return 0
+
+    targets = [event for event in recent_events if _event_needs_backfill(event)]
+    if not targets:
+        return 0
+
+    try:
+        jobs = await client.list_print_jobs()
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.debug("event reconciliation job lookup failed: %s", _exc_message(exc))
+        return 0
+
+    updates = 0
+    for event in targets:
+        matched_job = next((job for job in jobs if _job_matches_event(job, event)), None)
+        if matched_job is None:
+            continue
+
+        new_started_at = getattr(matched_job, "started_at", None) or event.get("started_at")
+        new_eta_end_at = getattr(matched_job, "eta_end_at", None) or event.get("eta_end_at")
+        new_duration = getattr(matched_job, "est_duration_sec", None)
+        new_filament = getattr(matched_job, "filament_estimated_g", None)
+
+        if _coerce_int(event.get("est_duration_sec")) in (None, 0) and _coerce_int(new_duration) in (None, 0):
+            new_duration = None
+
+        if update_print_start_event(
+            db_path,
+            event_id=int(event["id"]),
+            started_at=str(new_started_at) if new_started_at is not None else None,
+            eta_end_at=str(new_eta_end_at) if new_eta_end_at is not None else None,
+            est_duration_sec=_coerce_int(new_duration),
+            filament_estimated_g=_coerce_float(new_filament),
+        ):
+            updates += 1
+
+    return updates
 
 
 def _resolve_allowed_printer_ids(
@@ -371,7 +451,10 @@ async def poller_loop(
                 last_states,
                 print_service,
             )
+            reconciled = await reconcile_recent_events(client, db_path)
             LOGGER.info("poll iteration complete: seen=%s inserted=%s", outcome["seen"], outcome["inserted"])
+            if reconciled:
+                LOGGER.info("event reconciliation complete: updated=%s", reconciled)
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("poll iteration failed: %s", _exc_message(exc))
         await asyncio.sleep(interval_seconds)
