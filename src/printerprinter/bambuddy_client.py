@@ -136,13 +136,40 @@ class BambuddyClient:
 
             printer_id = str(item.get("printer_id") or item.get("device_id") or item.get("serial") or "unknown").strip()
             printer_name = item.get("printer_name") or item.get("device_name")
-            file_name = item.get("filename") or item.get("file_name") or item.get("job_name")
+            # Bambuddy PrintLogEntrySchema uses "print_name"; keep legacy fallbacks for other sources
+            file_name = (
+                item.get("print_name")
+                or item.get("filename")
+                or item.get("file_name")
+                or item.get("job_name")
+            )
             started_at = _to_iso8601(item.get("started_at") or item.get("start_time") or item.get("created_at"))
             remaining_sec = _to_int(item.get("remaining_seconds") or item.get("eta_seconds") or item.get("time_left"))
-            est_duration_sec = _to_int(item.get("duration_seconds") or item.get("estimated_duration") or remaining_sec)
-            filament_estimated_g = _to_float(item.get("filament_grams") or item.get("filament_estimated_g"))
+            # Prefer explicit duration; compute from timestamps if available; never fall back to remaining_sec alone
+            raw_duration = _to_int(item.get("duration_seconds") or item.get("estimated_duration"))
+            if raw_duration is None:
+                completed_at_raw = item.get("completed_at")
+                if completed_at_raw and started_at:
+                    try:
+                        dt_start = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
+                        dt_end = datetime.fromisoformat(str(completed_at_raw).replace("Z", "+00:00"))
+                        computed = int((dt_end - dt_start).total_seconds())
+                        raw_duration = computed if computed > 0 else None
+                    except ValueError:
+                        pass
+            est_duration_sec = raw_duration
+            # Bambuddy PrintLogEntrySchema uses "filament_used_grams"; keep legacy fallbacks for other sources
+            filament_estimated_g = _to_float(
+                item.get("filament_used_grams")
+                or item.get("filament_grams")
+                or item.get("filament_estimated_g")
+            )
 
-            eta_end_at: str | None = _to_iso8601(item.get("eta_end_at") or item.get("estimated_end_time"))
+            eta_end_at: str | None = _to_iso8601(
+                item.get("completed_at")
+                or item.get("eta_end_at")
+                or item.get("estimated_end_time")
+            )
             if eta_end_at is None and started_at is not None and remaining_sec is not None:
                 try:
                     dt_start = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
