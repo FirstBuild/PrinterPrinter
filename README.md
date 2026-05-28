@@ -112,13 +112,13 @@ curl http://localhost:8080/admin/events
 
 Run the setup script to fully set up PrinterPrinter with interactive configuration prompts. Choose one of the methods below:
 
-**Method 1: Direct pipe (simplest, recommended)**
+**Method 1: Pipe directly to bash (requires bash 4.1+, use Method 2 if this fails)**
 
 ```bash
-sudo bash <(curl -fsSL https://raw.githubusercontent.com/firstbuild/PrinterPrinter/main/scripts/setup-rpi.sh)
+curl -fsSL https://raw.githubusercontent.com/firstbuild/PrinterPrinter/main/scripts/setup-rpi.sh | sudo bash
 ```
 
-**Method 2: Download then run (if Method 1 fails)**
+**Method 2: Download then run (most reliable, recommended if Method 1 fails)**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/firstbuild/PrinterPrinter/main/scripts/setup-rpi.sh -o /tmp/setup.sh
@@ -134,7 +134,7 @@ cd PrinterPrinter
 sudo bash scripts/setup-rpi.sh
 ```
 
-Specify a different branch by passing it as an argument:
+Specify a different branch by passing it as an argument (Methods 2 & 3):
 
 ```bash
 sudo bash /tmp/setup.sh develop

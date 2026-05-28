@@ -55,14 +55,25 @@ prompt_for_value() {
     local default_value="$2"
     local result=""
     
-    # Ensure we're reading from the terminal, not from stdin
-    exec < /dev/tty 2>/dev/null || true
-    
-    if [ -z "$default_value" ]; then
-        read -p "$(echo -e ${BLUE}?)$(echo -e ${NC}) $prompt_text: " result
+    # Try to read from terminal first, fall back to stdin if not available
+    if [ -t 0 ]; then
+        # Terminal is available
+        if [ -z "$default_value" ]; then
+            read -p "$(echo -e ${BLUE}?)$(echo -e ${NC}) $prompt_text: " result
+        else
+            read -p "$(echo -e ${BLUE}?)$(echo -e ${NC}) $prompt_text [$default_value]: " result
+            result="${result:-$default_value}"
+        fi
     else
-        read -p "$(echo -e ${BLUE}?)$(echo -e ${NC}) $prompt_text [$default_value]: " result
-        result="${result:-$default_value}"
+        # No terminal, use default (for piped execution)
+        if [ -z "$default_value" ]; then
+            print_error "Cannot read interactive input (script was piped). Use Method 2 instead:"
+            print_info "curl -fsSL https://raw.githubusercontent.com/firstbuild/PrinterPrinter/main/scripts/setup-rpi.sh -o /tmp/setup.sh && sudo bash /tmp/setup.sh"
+            exit 1
+        else
+            result="$default_value"
+            print_info "$prompt_text: $result (using default)"
+        fi
     fi
     
     echo "$result"
@@ -72,8 +83,12 @@ prompt_yes_no() {
     local prompt_text="$1"
     local response=""
     
-    # Ensure we're reading from the terminal, not from stdin
-    exec < /dev/tty 2>/dev/null || true
+    # Check if terminal is available
+    if [ ! -t 0 ]; then
+        print_error "Cannot read interactive input (script was piped). Use Method 2 instead:"
+        print_info "curl -fsSL https://raw.githubusercontent.com/firstbuild/PrinterPrinter/main/scripts/setup-rpi.sh -o /tmp/setup.sh && sudo bash /tmp/setup.sh"
+        exit 1
+    fi
     
     while true; do
         read -p "$(echo -e ${BLUE}?)$(echo -e ${NC}) $prompt_text (y/n): " response
@@ -391,6 +406,19 @@ show_next_steps() {
 # Main execution
 main() {
     print_header "PrinterPrinter Raspberry Pi Setup"
+    
+    # Check if stdin is a terminal (interactive mode)
+    if [ ! -t 0 ]; then
+        print_error "This script requires interactive input but was executed without a terminal."
+        echo ""
+        print_warning "You appear to be using piped execution (curl ... | sudo bash)"
+        echo ""
+        print_info "Use Method 2 instead for reliable interactive setup:"
+        echo "  curl -fsSL https://raw.githubusercontent.com/firstbuild/PrinterPrinter/main/scripts/setup-rpi.sh -o /tmp/setup.sh"
+        echo "  sudo bash /tmp/setup.sh"
+        echo ""
+        exit 1
+    fi
     
     check_root
     check_system_dependencies
