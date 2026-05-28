@@ -110,16 +110,34 @@ curl http://localhost:8080/admin/events
 
 ### Automated Setup (Recommended)
 
-Run a single command to fully set up PrinterPrinter with interactive configuration prompts:
+Run the setup script to fully set up PrinterPrinter with interactive configuration prompts. Choose one of the methods below:
+
+**Method 1: Direct pipe (simplest, recommended)**
 
 ```bash
-sudo bash <(curl -fsSL https://raw.githubusercontent.com/bobbylindsey/PrinterPrinter/main/scripts/setup-rpi.sh)
+sudo bash <(curl -fsSL https://raw.githubusercontent.com/firstbuild/PrinterPrinter/main/scripts/setup-rpi.sh)
 ```
 
-Or specify a different branch:
+**Method 2: Download then run (if Method 1 fails)**
 
 ```bash
-sudo bash <(curl -fsSL https://raw.githubusercontent.com/bobbylindsey/PrinterPrinter/develop/scripts/setup-rpi.sh)
+curl -fsSL https://raw.githubusercontent.com/firstbuild/PrinterPrinter/main/scripts/setup-rpi.sh -o /tmp/setup.sh
+sudo bash /tmp/setup.sh
+```
+
+**Method 3: Clone repo locally (manual)**
+
+```bash
+cd /tmp
+git clone -b main https://github.com/firstbuild/PrinterPrinter.git
+cd PrinterPrinter
+sudo bash scripts/setup-rpi.sh
+```
+
+Specify a different branch by passing it as an argument:
+
+```bash
+sudo bash /tmp/setup.sh develop
 ```
 
 The setup script will:
@@ -216,7 +234,7 @@ This repository includes:
 
 1. Set `.env` with Bambuddy LAN URL, for example:
 
-- `BAMBUDDY_BASE_URL=http://10.206.50.172:8000`
+- `BAMBUDDY_BASE_URL=http://bambuddy.local:8000`
 
 2. Build and run:
 
@@ -228,7 +246,7 @@ docker compose -f docker-compose.example.yml up -d --build
 
 If your Bambuddy service is named `bambuddy` in compose, set:
 
-- `BAMBUDDY_BASE_URL=http://bambuddy:8000`
+- `BAMBUDDY_BASE_URL=http://bambuddy.local:8000`
 
 Use shared compose network (default) so service DNS works.
 

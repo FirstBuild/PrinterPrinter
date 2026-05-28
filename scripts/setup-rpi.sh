@@ -4,7 +4,13 @@
 # This script automates the installation and configuration of PrinterPrinter on a Raspberry Pi
 # Usage: curl -fsSL https://raw.githubusercontent.com/<user>/<repo>/<branch>/scripts/setup-rpi.sh | bash
 
+# Ensure we're using bash (not sh)
+if [ -z "$BASH_VERSION" ]; then
+    exec bash "$0" "$@"
+fi
+
 set -e  # Exit on error
+set -o pipefail  # Exit if any part of a pipeline fails
 
 # Color codes for output
 RED='\033[0;31m'
@@ -16,8 +22,8 @@ NC='\033[0m' # No Color
 # Configuration defaults
 INSTALL_DIR="/opt/printerprinter"
 SERVICE_NAME="printerprinter"
-GITHUB_REPO="${GITHUB_REPO:-https://github.com/bobbylindsey/PrinterPrinter.git}"
-BRANCH="${BRANCH:-main}"
+GITHUB_REPO="${GITHUB_REPO:-https://github.com/firstbuild/PrinterPrinter.git}"
+BRANCH="${1:-main}"
 VENV_DIR="${INSTALL_DIR}/venv"
 DB_DIR="${INSTALL_DIR}/data"
 
@@ -49,6 +55,9 @@ prompt_for_value() {
     local default_value="$2"
     local result=""
     
+    # Ensure we're reading from the terminal, not from stdin
+    exec < /dev/tty 2>/dev/null || true
+    
     if [ -z "$default_value" ]; then
         read -p "$(echo -e ${BLUE}?)$(echo -e ${NC}) $prompt_text: " result
     else
@@ -62,6 +71,9 @@ prompt_for_value() {
 prompt_yes_no() {
     local prompt_text="$1"
     local response=""
+    
+    # Ensure we're reading from the terminal, not from stdin
+    exec < /dev/tty 2>/dev/null || true
     
     while true; do
         read -p "$(echo -e ${BLUE}?)$(echo -e ${NC}) $prompt_text (y/n): " response
@@ -193,7 +205,7 @@ setup_python_environment() {
     # Create virtual environment
     if [ ! -d "$VENV_DIR" ]; then
         print_info "Creating Python virtual environment..."
-        python3 -m venv "$VENV_DIR"
+        python3 -m venv "$VENV_DIR" 2>&1 | grep -v "^$" || true
         print_success "Virtual environment created"
     else
         print_info "Virtual environment already exists"
@@ -204,8 +216,8 @@ setup_python_environment() {
     # shellcheck disable=SC1091
     source "$VENV_DIR/bin/activate"
     
-    pip install --upgrade pip setuptools wheel > /dev/null 2>&1
-    pip install -e . > /dev/null 2>&1
+    pip install --upgrade pip setuptools wheel >/dev/null 2>&1 || print_warning "pip upgrade had issues"
+    pip install -e . >/dev/null 2>&1 || print_error "Failed to install project dependencies"
     
     print_success "Python dependencies installed"
 }
