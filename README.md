@@ -49,6 +49,9 @@ Copy `.env.example` to `.env` and update values.
 - `PRINTERPRINTER_LOG_LEVEL` (default `INFO`)
 - `PRINTERPRINTER_DB_PATH` (default `./data/printerprinter.sqlite3`)
 - `PRINTERPRINTER_POLL_INTERVAL_SECONDS` (default `5`)
+- `PRINTERPRINTER_LABEL_WAIT_SECONDS` (default `60`; wait window for missing duration/filament before deferring print)
+- `PRINTERPRINTER_LABEL_WAIT_POLL_SECONDS` (default `5`; refresh interval during wait window)
+- `PRINTERPRINTER_PENDING_LABEL_MAX_AGE_SECONDS` (default `900`; only auto-print deferred events younger than this)
 - `PRINTERPRINTER_MONITORED_PRINTER_IDS` (comma-separated Bambuddy numeric IDs, empty means all)
 - `PRINTERPRINTER_MONITORED_PRINTER_IDENTIFIERS` (comma-separated IDs, names, serials, or IPs to auto-resolve)
 

@@ -16,6 +16,7 @@ from printerprinter.logging_config import configure_logging
 from printerprinter.printing import BrotherPrintService
 from printerprinter.storage import (
     get_print_start_event,
+    has_label_job_attempt,
     init_db,
     list_recent_print_start_events,
     record_label_job_attempt,
@@ -249,6 +250,48 @@ def _normalize_name(value: object | None) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _name_tokens(value: object | None) -> set[str]:
+    normalized = _normalize_name(value)
+    if not normalized:
+        return set()
+    return {token for token in normalized.split(" ") if token}
+
+
+def _names_compatible(expected: object | None, candidate: object | None) -> bool:
+    expected_normalized = _normalize_name(expected)
+    candidate_normalized = _normalize_name(candidate)
+
+    if not expected_normalized and not candidate_normalized:
+        return True
+    if not expected_normalized or not candidate_normalized:
+        return False
+    if expected_normalized == candidate_normalized:
+        return True
+
+    expected_tokens = _name_tokens(expected)
+    candidate_tokens = _name_tokens(candidate)
+
+    if not expected_tokens or not candidate_tokens:
+        return False
+
+    if expected_tokens == candidate_tokens:
+        return True
+
+    ignored_suffix_tokens = {"gcode", "3mf", "stl"}
+    expected_core = expected_tokens - ignored_suffix_tokens
+    candidate_core = candidate_tokens - ignored_suffix_tokens
+    if not expected_core or not candidate_core:
+        return False
+
+    smaller, larger = (
+        (expected_core, candidate_core)
+        if len(expected_core) <= len(candidate_core)
+        else (candidate_core, expected_core)
+    )
+    # Accept subset matches when at least three meaningful words align.
+    return len(smaller) >= 3 and smaller.issubset(larger)
+
+
 def _job_enrichment_score(job: object) -> tuple[int, int]:
     duration = _coerce_int(getattr(job, "est_duration_sec", None))
     filament = _coerce_float(getattr(job, "filament_estimated_g", None))
@@ -289,7 +332,7 @@ def _pick_running_job_fields(
             continue
 
         job_file_name = _normalize_name(getattr(job, "file_name", None))
-        if normalized_file_name and job_file_name and job_file_name != normalized_file_name:
+        if normalized_file_name and job_file_name and not _names_compatible(normalized_file_name, job_file_name):
             continue
 
         candidates.append(job)
@@ -367,6 +410,23 @@ def _event_needs_backfill(event: dict[str, object]) -> bool:
     )
 
 
+def _parse_created_at(value: object | None) -> datetime | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+
+    normalized = text.replace(" ", "T").replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt
+
+
 def _job_matches_event(job, event: dict[str, object]) -> bool:
     job_printer_id = _normalize_name(getattr(job, "printer_id", None))
     event_printer_id = _normalize_name(event.get("printer_id"))
@@ -376,7 +436,7 @@ def _job_matches_event(job, event: dict[str, object]) -> bool:
     event_file_name = _normalize_name(event.get("file_name"))
     job_file_name = _normalize_name(getattr(job, "file_name", None))
     if event_file_name:
-        return event_file_name == job_file_name
+        return _names_compatible(event_file_name, job_file_name)
 
     if job_file_name:
         return False
@@ -436,6 +496,86 @@ async def reconcile_recent_events(client: BambuddyClient, db_path: str) -> int:
     return updates
 
 
+async def _attempt_print_for_event(
+    db_path: str,
+    print_service: BrotherPrintService,
+    event: dict[str, object],
+) -> bool:
+    print_result = await asyncio.to_thread(print_service.print_event, event)
+    status = "printed" if print_result.ok else "failed"
+    record_label_job_attempt(
+        db_path,
+        event_id=int(event["id"]),
+        status=status,
+        attempts=1,
+        error_message=print_result.error,
+    )
+    return print_result.ok
+
+
+async def _wait_for_event_data(
+    client: BambuddyClient,
+    db_path: str,
+    *,
+    event_id: int,
+    timeout_seconds: float,
+    poll_interval_seconds: float,
+) -> dict[str, object] | None:
+    event = get_print_start_event(db_path, event_id)
+    if event is None:
+        return None
+    if not _event_needs_backfill(event):
+        return event
+
+    timeout = max(0.0, float(timeout_seconds))
+    interval = max(1.0, float(poll_interval_seconds))
+    if timeout == 0:
+        return event
+
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(interval)
+        await reconcile_recent_events(client, db_path)
+        event = get_print_start_event(db_path, event_id)
+        if event is None:
+            return None
+        if not _event_needs_backfill(event):
+            return event
+
+    return event
+
+
+async def process_pending_labels(
+    db_path: str,
+    print_service: BrotherPrintService,
+    *,
+    max_age_seconds: float,
+    limit: int = 50,
+) -> int:
+    recent_events = list_recent_print_start_events(db_path, limit=limit)
+    now = datetime.now(UTC)
+    attempts = 0
+
+    for event in sorted(recent_events, key=lambda item: int(item["id"])):
+        event_id = int(event["id"])
+        if has_label_job_attempt(db_path, event_id):
+            continue
+
+        if _event_needs_backfill(event):
+            continue
+
+        created_at = _parse_created_at(event.get("created_at"))
+        if created_at is None:
+            continue
+        if (now - created_at).total_seconds() > max(0.0, float(max_age_seconds)):
+            continue
+
+        await _attempt_print_for_event(db_path, print_service, event)
+        attempts += 1
+
+    return attempts
+
+
 def _resolve_allowed_printer_ids(
     printers: list,
     monitored_ids: set[str],
@@ -467,11 +607,15 @@ async def run_poll_iteration(
     monitored_identifiers: set[str],
     last_states: dict[str, str],
     print_service: BrotherPrintService,
+    label_wait_seconds: float,
+    label_wait_poll_seconds: float,
 ) -> dict[str, int]:
     printers = await client.list_printers()
     allowed_ids = _resolve_allowed_printer_ids(printers, monitored_ids, monitored_identifiers)
     seen = 0
     inserted = 0
+    printed = 0
+    deferred = 0
 
     for printer in printers:
         if allowed_ids and printer.printer_id not in allowed_ids:
@@ -513,17 +657,31 @@ async def run_poll_iteration(
         )
         if result["inserted"]:
             inserted += 1
-            print_result = await asyncio.to_thread(print_service.print_event, result["event"])
-            status = "printed" if print_result.ok else "failed"
-            record_label_job_attempt(
-                db_path,
-                event_id=int(result["event"]["id"]),
-                status=status,
-                attempts=1,
-                error_message=print_result.error,
-            )
+            event_row: dict[str, object] | None = result["event"]
+            if _event_needs_backfill(event_row):
+                deferred += 1
+                event_row = await _wait_for_event_data(
+                    client,
+                    db_path,
+                    event_id=int(result["event"]["id"]),
+                    timeout_seconds=label_wait_seconds,
+                    poll_interval_seconds=label_wait_poll_seconds,
+                )
 
-    return {"seen": seen, "inserted": inserted}
+            if event_row is None:
+                continue
+
+            if _event_needs_backfill(event_row):
+                LOGGER.info(
+                    "label deferred: event_id=%s waiting for duration/filament",
+                    event_row.get("id"),
+                )
+                continue
+
+            if await _attempt_print_for_event(db_path, print_service, event_row):
+                printed += 1
+
+    return {"seen": seen, "inserted": inserted, "printed": printed, "deferred": deferred}
 
 
 async def poller_loop(
@@ -534,6 +692,9 @@ async def poller_loop(
     monitored_identifiers: set[str],
     last_states: dict[str, str],
     print_service: BrotherPrintService,
+    label_wait_seconds: float,
+    label_wait_poll_seconds: float,
+    pending_label_max_age_seconds: float,
 ) -> None:
     while True:
         try:
@@ -544,11 +705,26 @@ async def poller_loop(
                 monitored_identifiers,
                 last_states,
                 print_service,
+                label_wait_seconds,
+                label_wait_poll_seconds,
             )
             reconciled = await reconcile_recent_events(client, db_path)
-            LOGGER.info("poll iteration complete: seen=%s inserted=%s", outcome["seen"], outcome["inserted"])
+            pending_attempts = await process_pending_labels(
+                db_path,
+                print_service,
+                max_age_seconds=pending_label_max_age_seconds,
+            )
+            LOGGER.info(
+                "poll iteration complete: seen=%s inserted=%s printed=%s deferred=%s",
+                outcome["seen"],
+                outcome["inserted"],
+                outcome.get("printed", 0),
+                outcome.get("deferred", 0),
+            )
             if reconciled:
                 LOGGER.info("event reconciliation complete: updated=%s", reconciled)
+            if pending_attempts:
+                LOGGER.info("pending label processing complete: attempted=%s", pending_attempts)
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("poll iteration failed: %s", _exc_message(exc))
         await asyncio.sleep(interval_seconds)
@@ -595,6 +771,9 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             monitored_identifiers,
             last_states,
             print_service,
+            settings.label_wait_seconds,
+            settings.label_wait_poll_seconds,
+            settings.pending_label_max_age_seconds,
         ),
         name="bambuddy-poller",
     )
@@ -664,6 +843,8 @@ async def admin_poll_once() -> dict[str, int]:
             monitored_identifiers,
             state_cache,
             print_service,
+            settings.label_wait_seconds,
+            settings.label_wait_poll_seconds,
         )
     except Exception as exc:  # noqa: BLE001
         msg = _exc_message(exc)

@@ -192,3 +192,17 @@ def record_label_job_attempt(
         )
         conn.commit()
         return int(cur.lastrowid)
+
+
+def has_label_job_attempt(db_path: str, event_id: int) -> bool:
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM label_jobs
+            WHERE event_id = ?
+            LIMIT 1;
+            """,
+            (event_id,),
+        ).fetchone()
+    return row is not None
