@@ -36,6 +36,13 @@ Latest label preview (DK1202 / 62x100):
 - `POST /admin/poll-once`
 - `GET /admin/printers`
 - `GET /admin/events`
+- `GET /admin/ui`
+- `GET /admin`
+- `GET /admin/config`
+- `POST /admin/config`
+- `POST /admin/actions/restart`
+- `POST /admin/actions/update`
+- `GET /admin/label-preview/{event_id}.png`
 - `POST /admin/print-event/{event_id}`
 
 ## Configuration
@@ -52,6 +59,11 @@ Copy `.env.example` to `.env` and update values.
 - `PRINTERPRINTER_LABEL_WAIT_SECONDS` (default `60`; wait window for missing duration/filament before deferring print)
 - `PRINTERPRINTER_LABEL_WAIT_POLL_SECONDS` (default `5`; refresh interval during wait window)
 - `PRINTERPRINTER_PENDING_LABEL_MAX_AGE_SECONDS` (default `900`; only auto-print deferred events younger than this)
+- `PRINTERPRINTER_ENV_FILE_PATH` (default `.env`; config file used by admin UI save flow)
+- `PRINTERPRINTER_SERVICE_NAME` (default `printerprinter`; systemd service name for restart/update actions)
+- `PRINTERPRINTER_INSTALL_DIR` (default `/opt/printerprinter`; repository path used by update action)
+- `PRINTERPRINTER_UPDATE_BRANCH` (default `main`; branch used by update action)
+- `PRINTERPRINTER_VENV_PATH` (default `/opt/printerprinter/venv`; virtualenv used for update install)
 - `PRINTERPRINTER_MONITORED_PRINTER_IDS` (comma-separated Bambuddy numeric IDs, empty means all)
 - `PRINTERPRINTER_MONITORED_PRINTER_IDENTIFIERS` (comma-separated IDs, names, serials, or IPs to auto-resolve)
 

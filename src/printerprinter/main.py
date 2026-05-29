@@ -1,17 +1,24 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import re
+import shlex
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse, Response
+from pydantic import BaseModel, Field
 
+from printerprinter.admin_ui import render_admin_ui_html
 from printerprinter.bambuddy_client import BambuddyClient
 from printerprinter.config import get_settings
+from printerprinter.labeling import render_label_image
 from printerprinter.logging_config import configure_logging
 from printerprinter.printing import BrotherPrintService
 from printerprinter.storage import (
@@ -26,6 +33,115 @@ from printerprinter.storage import (
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+EDITABLE_CONFIG_KEYS: tuple[str, ...] = (
+    "BAMBUDDY_BASE_URL",
+    "BAMBUDDY_API_TOKEN",
+    "BAMBUDDY_TIMEOUT_SECONDS",
+    "BAMBUDDY_AUTH_MODE",
+    "BAMBUDDY_AUTH_HEADER_NAME",
+    "BAMBUDDY_JOBS_ENDPOINT",
+    "BAMBUDDY_PRINTERS_ENDPOINT",
+    "BAMBUDDY_PRINTER_STATUS_ENDPOINT_TEMPLATE",
+    "PRINTERPRINTER_MONITORED_PRINTER_IDS",
+    "PRINTERPRINTER_MONITORED_PRINTER_IDENTIFIERS",
+    "PRINTERPRINTER_POLL_INTERVAL_SECONDS",
+    "PRINTERPRINTER_LABEL_WAIT_SECONDS",
+    "PRINTERPRINTER_LABEL_WAIT_POLL_SECONDS",
+    "PRINTERPRINTER_PENDING_LABEL_MAX_AGE_SECONDS",
+    "BROTHER_ENABLED",
+    "BROTHER_MODEL",
+    "BROTHER_PRINTER_URI",
+    "BROTHER_LABEL_SIZE",
+    "BROTHER_CUT",
+    "SHOW_PRICE_ON_LABEL",
+    "FILAMENT_PRICE_PER_GRAM",
+)
+
+
+class ConfigUpdateRequest(BaseModel):
+    values: dict[str, str] = Field(default_factory=dict)
+
+
+def _resolve_env_file_path() -> Path:
+    settings = get_settings()
+    env_path = Path(settings.env_file_path)
+    if env_path.is_absolute():
+        return env_path
+    cwd_candidate = Path.cwd() / env_path
+    if cwd_candidate.exists():
+        return cwd_candidate
+    return Path(settings.install_dir) / env_path
+
+
+def _read_env_lines(env_path: Path) -> list[str]:
+    if not env_path.exists():
+        return []
+    return env_path.read_text(encoding="utf-8").splitlines()
+
+
+def _parse_env_map(lines: list[str]) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, raw_value = stripped.split("=", 1)
+        values[key.strip()] = raw_value.strip()
+    return values
+
+
+def _write_env_updates(env_path: Path, updates: dict[str, str]) -> None:
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    lines = _read_env_lines(env_path)
+    touched_keys: set[str] = set()
+    output_lines: list[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            output_lines.append(line)
+            continue
+
+        key, _ = stripped.split("=", 1)
+        normalized_key = key.strip()
+        if normalized_key in updates:
+            output_lines.append(f"{normalized_key}={updates[normalized_key]}")
+            touched_keys.add(normalized_key)
+        else:
+            output_lines.append(line)
+
+    missing_keys = [key for key in updates if key not in touched_keys]
+    if missing_keys and output_lines and output_lines[-1].strip():
+        output_lines.append("")
+    for key in missing_keys:
+        output_lines.append(f"{key}={updates[key]}")
+
+    content = "\n".join(output_lines).rstrip() + "\n"
+    env_path.write_text(content, encoding="utf-8")
+
+
+async def _run_exec_command(command: list[str], cwd: str | None = None) -> tuple[int, str, str]:
+    process = await asyncio.create_subprocess_exec(
+        *command,
+        cwd=cwd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await process.communicate()
+    return process.returncode, stdout.decode("utf-8", errors="replace"), stderr.decode("utf-8", errors="replace")
+
+
+def _shell_join(command: list[str]) -> str:
+    return " ".join(shlex.quote(part) for part in command)
+
+
+def _tail_text(value: str, max_lines: int = 20) -> str:
+    lines = [line for line in value.splitlines() if line.strip()]
+    if len(lines) <= max_lines:
+        return "\n".join(lines)
+    return "\n".join(lines[-max_lines:])
 
 
 def _exc_message(exc: Exception) -> str:
@@ -882,6 +998,129 @@ async def admin_events(limit: int = 50) -> dict[str, object]:
     settings = get_settings()
     items = list_recent_print_start_events(settings.db_path, limit=limit)
     return {"count": len(items), "items": items}
+
+
+@app.get("/admin/ui", response_class=HTMLResponse)
+async def admin_ui() -> HTMLResponse:
+    return HTMLResponse(content=render_admin_ui_html())
+
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_ui_shortcut() -> HTMLResponse:
+    return HTMLResponse(content=render_admin_ui_html())
+
+
+@app.get("/admin/config")
+async def admin_get_config() -> dict[str, object]:
+    env_path = _resolve_env_file_path()
+    lines = _read_env_lines(env_path)
+    values = _parse_env_map(lines)
+    filtered_values = {key: values.get(key, "") for key in EDITABLE_CONFIG_KEYS}
+    missing = [key for key, value in filtered_values.items() if not value]
+    return {
+        "env_file_path": str(env_path),
+        "editable_keys": list(EDITABLE_CONFIG_KEYS),
+        "values": filtered_values,
+        "missing": missing,
+    }
+
+
+@app.post("/admin/config")
+async def admin_update_config(payload: ConfigUpdateRequest) -> dict[str, object]:
+    unknown_keys = [key for key in payload.values if key not in EDITABLE_CONFIG_KEYS]
+    if unknown_keys:
+        raise HTTPException(status_code=400, detail=f"Unsupported config keys: {', '.join(unknown_keys)}")
+
+    updates = {key: str(value).strip() for key, value in payload.values.items()}
+    env_path = _resolve_env_file_path()
+    _write_env_updates(env_path, updates)
+    get_settings.cache_clear()
+    return {
+        "ok": True,
+        "updated": sorted(updates.keys()),
+        "env_file_path": str(env_path),
+        "detail": "Saved. Restart service to apply runtime polling/printing changes.",
+    }
+
+
+@app.post("/admin/actions/restart")
+async def admin_action_restart() -> dict[str, object]:
+    settings = get_settings()
+    command = ["systemctl", "restart", settings.service_name]
+    code, stdout, stderr = await _run_exec_command(command)
+    if code != 0:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Command failed ({_shell_join(command)}): {_tail_text(stderr) or _tail_text(stdout)}",
+        )
+    return {
+        "ok": True,
+        "command": _shell_join(command),
+        "detail": f"Service {settings.service_name} restarted.",
+    }
+
+
+@app.post("/admin/actions/update")
+async def admin_action_update() -> dict[str, object]:
+    settings = get_settings()
+    install_dir = settings.install_dir
+    branch = settings.update_branch
+    service_name = settings.service_name
+    pip_path = Path(settings.venv_path) / "bin" / "pip"
+
+    commands: list[tuple[list[str], str | None, str]] = [
+        (["git", "fetch", "origin", branch], install_dir, "fetch"),
+        (["git", "pull", "--ff-only", "origin", branch], install_dir, "pull"),
+    ]
+    if pip_path.exists():
+        commands.append(([str(pip_path), "install", "-e", install_dir], install_dir, "pip_install"))
+    else:
+        commands.append((["python3", "-m", "pip", "install", "-e", install_dir], install_dir, "pip_install"))
+    commands.append((["systemctl", "restart", service_name], None, "restart"))
+
+    completed_steps: list[str] = []
+    logs: list[dict[str, str]] = []
+    for command, cwd, step in commands:
+        code, stdout, stderr = await _run_exec_command(command, cwd=cwd)
+        logs.append(
+            {
+                "step": step,
+                "command": _shell_join(command),
+                "stdout": _tail_text(stdout),
+                "stderr": _tail_text(stderr),
+            }
+        )
+        if code != 0:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Update failed during {step}: {_tail_text(stderr) or _tail_text(stdout)}",
+            )
+        completed_steps.append(step)
+
+    return {
+        "ok": True,
+        "steps": completed_steps,
+        "logs": logs,
+        "detail": f"Updated from {branch} and restarted {service_name}.",
+    }
+
+
+@app.get("/admin/label-preview/{event_id}.png")
+async def admin_label_preview(event_id: int) -> Response:
+    settings = get_settings()
+    event = get_print_start_event(settings.db_path, event_id)
+    if event is None:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    image = render_label_image(
+        event,
+        settings.brother_label_size,
+        show_price=settings.show_price_on_label,
+        price_per_gram=settings.filament_price_per_gram,
+    )
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return Response(content=buffer.getvalue(), media_type="image/png")
 
 
 @app.post("/admin/print-event/{event_id}")
