@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
@@ -206,7 +207,10 @@ def _needs_enrichment(fields: dict[str, object | None]) -> bool:
 def _normalize_name(value: object | None) -> str:
     if value is None:
         return ""
-    return str(value).strip().lower()
+    text = str(value).strip().lower()
+    # Normalize common filename delimiters to improve matching across API sources.
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def _job_enrichment_score(job: object) -> tuple[int, int]:
