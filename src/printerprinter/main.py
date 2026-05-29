@@ -94,6 +94,32 @@ def _to_iso8601(value: object | None) -> str | None:
     return dt.isoformat()
 
 
+def _parse_datetime(value: object | None) -> datetime | None:
+    iso = _to_iso8601(value)
+    if iso is None:
+        return None
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt
+
+
+def _eta_mismatch(started_at: object | None, eta_end_at: object | None, est_duration_sec: object | None) -> bool:
+    start_dt = _parse_datetime(started_at)
+    eta_dt = _parse_datetime(eta_end_at)
+    duration = _coerce_int(est_duration_sec)
+    if start_dt is None or eta_dt is None or duration is None or duration <= 0:
+        return False
+
+    expected_eta = start_dt + timedelta(seconds=duration)
+    delta_seconds = abs((eta_dt - expected_eta).total_seconds())
+    # Allow small drift from polling/rounding but flag obviously inconsistent ETA.
+    return delta_seconds > 120
+
+
 def _get_status_value(status: dict[str, object], keys: tuple[str, ...]) -> object | None:
     for key in keys:
         value = status.get(key)
@@ -306,9 +332,16 @@ async def _build_event_fields(
 
 
 def _event_needs_backfill(event: dict[str, object]) -> bool:
-    return any(
+    if any(
         event.get(key) in (None, "") or (key == "est_duration_sec" and _coerce_int(event.get(key)) in (None, 0))
         for key in ("eta_end_at", "est_duration_sec", "filament_estimated_g")
+    ):
+        return True
+
+    return _eta_mismatch(
+        event.get("started_at"),
+        event.get("eta_end_at"),
+        event.get("est_duration_sec"),
     )
 
 
@@ -359,7 +392,13 @@ async def reconcile_recent_events(client: BambuddyClient, db_path: str) -> int:
         new_duration = getattr(matched_job, "est_duration_sec", None)
         new_filament = getattr(matched_job, "filament_estimated_g", None)
 
-        if _coerce_int(event.get("est_duration_sec")) in (None, 0) and _coerce_int(new_duration) in (None, 0):
+        normalized_duration = _coerce_int(new_duration)
+        if _eta_mismatch(new_started_at, new_eta_end_at, normalized_duration):
+            start_dt = _parse_datetime(new_started_at)
+            if start_dt is not None and normalized_duration is not None and normalized_duration > 0:
+                new_eta_end_at = (start_dt + timedelta(seconds=normalized_duration)).isoformat()
+
+        if _coerce_int(event.get("est_duration_sec")) in (None, 0) and normalized_duration in (None, 0):
             new_duration = None
 
         if update_print_start_event(
@@ -367,7 +406,7 @@ async def reconcile_recent_events(client: BambuddyClient, db_path: str) -> int:
             event_id=int(event["id"]),
             started_at=str(new_started_at) if new_started_at is not None else None,
             eta_end_at=str(new_eta_end_at) if new_eta_end_at is not None else None,
-            est_duration_sec=_coerce_int(new_duration),
+            est_duration_sec=normalized_duration,
             filament_estimated_g=_coerce_float(new_filament),
         ):
             updates += 1
