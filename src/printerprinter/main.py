@@ -120,6 +120,14 @@ def _eta_mismatch(started_at: object | None, eta_end_at: object | None, est_dura
     return delta_seconds > 120
 
 
+def _eta_from_start_and_duration(started_at: object | None, est_duration_sec: object | None) -> str | None:
+    start_dt = _parse_datetime(started_at)
+    duration = _coerce_int(est_duration_sec)
+    if start_dt is None or duration is None or duration <= 0:
+        return None
+    return (start_dt + timedelta(seconds=duration)).isoformat()
+
+
 def _get_status_value(status: dict[str, object], keys: tuple[str, ...]) -> object | None:
     for key in keys:
         value = status.get(key)
@@ -227,6 +235,8 @@ def _needs_enrichment(fields: dict[str, object | None]) -> bool:
         return True
     if filament_estimated_g is None:
         return True
+    if _eta_mismatch(started_at, eta_end_at, est_duration_sec):
+        return True
     return False
 
 
@@ -328,6 +338,18 @@ async def _build_event_fields(
                 if fields.get(key) is None and value is not None:
                     fields[key] = value
 
+            # If status supplied a short-term ETA snapshot but jobs gave a durable duration,
+            # force ETA to align with started_at + duration for label correctness.
+            if _eta_mismatch(fields.get("started_at"), fields.get("eta_end_at"), fields.get("est_duration_sec")):
+                rebuilt_eta = _eta_from_start_and_duration(fields.get("started_at"), fields.get("est_duration_sec"))
+                if rebuilt_eta is not None:
+                    fields["eta_end_at"] = rebuilt_eta
+
+    if _eta_mismatch(fields.get("started_at"), fields.get("eta_end_at"), fields.get("est_duration_sec")):
+        rebuilt_eta = _eta_from_start_and_duration(fields.get("started_at"), fields.get("est_duration_sec"))
+        if rebuilt_eta is not None:
+            fields["eta_end_at"] = rebuilt_eta
+
     return fields
 
 
@@ -394,9 +416,9 @@ async def reconcile_recent_events(client: BambuddyClient, db_path: str) -> int:
 
         normalized_duration = _coerce_int(new_duration)
         if _eta_mismatch(new_started_at, new_eta_end_at, normalized_duration):
-            start_dt = _parse_datetime(new_started_at)
-            if start_dt is not None and normalized_duration is not None and normalized_duration > 0:
-                new_eta_end_at = (start_dt + timedelta(seconds=normalized_duration)).isoformat()
+            rebuilt_eta = _eta_from_start_and_duration(new_started_at, normalized_duration)
+            if rebuilt_eta is not None:
+                new_eta_end_at = rebuilt_eta
 
         if _coerce_int(event.get("est_duration_sec")) in (None, 0) and normalized_duration in (None, 0):
             new_duration = None
