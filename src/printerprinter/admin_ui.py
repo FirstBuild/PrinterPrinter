@@ -178,6 +178,17 @@ def render_admin_ui_html() -> str:
     }
 
     .mono { font-family: 'Menlo', 'Consolas', monospace; }
+    .logs-output {
+      background: #f8f8f8;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 12px;
+      font-size: 0.8rem;
+      line-height: 1.4;
+      overflow: auto;
+      max-height: 500px;
+      white-space: pre;
+    }
 
     .chip {
       display: inline-block;
@@ -211,6 +222,7 @@ def render_admin_ui_html() -> str:
         <div class=\"btns\">
           <button class=\"secondary\" id=\"refresh-all\">Refresh All</button>
           <button class=\"secondary\" id=\"poll-once\">Poll Once</button>
+          <button class=\"secondary\" id=\"view-logs\">View Logs</button>
           <button class=\"primary\" id=\"restart-service\">Restart Service</button>
           <button class=\"danger\" id=\"update-service\">Update + Restart</button>
         </div>
@@ -286,6 +298,14 @@ def render_admin_ui_html() -> str:
         </div>
         <img id=\"preview\" class=\"preview\" alt=\"Label preview\" style=\"display:none;\" />
       </article>
+      <article class=\"card logs\">
+        <h2>System Logs</h2>
+        <div class=\"status\" id=\"logs-status\"></div>
+        <pre id=\"logs-output\" class=\"mono logs-output\"></pre>
+        <div class=\"btns\">
+          <button class=\"secondary\" id=\"refresh-logs\">Refresh Logs</button>
+        </div>
+      </article>
     </section>
   </div>
 
@@ -304,6 +324,8 @@ def render_admin_ui_html() -> str:
       opsStatus: document.getElementById('ops-status'),
       configStatus: document.getElementById('config-status'),
       eventsStatus: document.getElementById('events-status'),
+      logsOutput: document.getElementById('logs-output'),
+      logsStatus: document.getElementById('logs-status'),
     };
 
     function setStatus(el, message, level='') {
@@ -324,6 +346,18 @@ def render_admin_ui_html() -> str:
     }
 
     function fmt(v) { return (v === null || v === undefined || v === '') ? 'Unknown' : String(v); }
+
+    async function loadLogs(lines = 100) {
+      try {
+        setStatus(ids.logsStatus, 'Fetching logs...', '');
+        const payload = await api(`/admin/logs?lines=${lines}`);
+        ids.logsOutput.textContent = payload.logs;
+        ids.logsOutput.scrollTop = ids.logsOutput.scrollHeight;
+        setStatus(ids.logsStatus, 'Logs updated', 'ok');
+      } catch (err) {
+        setStatus(ids.logsStatus, err.message, 'error');
+      }
+    }
 
     async function loadConfig() {
       const payload = await api('/admin/config');
@@ -409,6 +443,14 @@ def render_admin_ui_html() -> str:
       }
     });
 
+    document.getElementById('view-logs').addEventListener('click', async () => {
+      try {
+        await loadLogs();
+      } catch (err) {
+        setStatus(ids.logsStatus, err.message, 'error');
+      }
+    });
+
     document.getElementById('restart-service').addEventListener('click', async () => {
       try {
         await runAction('/admin/actions/restart', ids.opsStatus, 'Service restarted');
@@ -427,6 +469,14 @@ def render_admin_ui_html() -> str:
         }
       } catch (err) {
         setStatus(ids.opsStatus, err.message, 'error');
+      }
+    });
+
+    document.getElementById('refresh-logs').addEventListener('click', async () => {
+      try {
+        await loadLogs();
+      } catch (err) {
+        setStatus(ids.logsStatus, err.message, 'error');
       }
     });
 

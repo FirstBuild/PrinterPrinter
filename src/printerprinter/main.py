@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import AsyncIterator
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
 
@@ -998,6 +998,22 @@ async def admin_events(limit: int = 50) -> dict[str, object]:
     settings = get_settings()
     items = list_recent_print_start_events(settings.db_path, limit=limit)
     return {"count": len(items), "items": items}
+
+
+@app.get("/admin/logs")
+async def admin_get_logs(lines: int = Query(100)) -> dict[str, str]:
+    if not 1 <= lines <= 1000:
+        raise HTTPException(status_code=400, detail="Lines must be between 1 and 1000")
+
+    settings = get_settings()
+    command = ["journalctl", "-u", settings.service_name, "-n", str(lines), "--no-pager"]
+    code, stdout, stderr = await _run_exec_command(command)
+    if code != 0:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch logs: {stderr or stdout}"
+        )
+    return {"logs": stdout}
 
 
 @app.get("/admin/ui", response_class=HTMLResponse)
