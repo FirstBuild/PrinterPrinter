@@ -205,9 +205,10 @@ def render_admin_ui_html() -> str:
       max-width: 100%;
       border: 1px solid var(--line);
       border-radius: 10px;
-      margin: 8px auto;
+      margin: 20px auto;
       background: #fff;
       display: block;
+      transform: rotate(90deg);
     }
 
     .preview-row td {
@@ -502,6 +503,13 @@ def render_admin_ui_html() -> str:
 
       if (previewId) {
         const row = btn.closest('tr');
+        const existingPreview = row.nextElementSibling;
+
+        if (existingPreview && existingPreview.classList.contains('preview-row')) {
+          existingPreview.remove();
+          return;
+        }
+
         document.querySelectorAll('.preview-row').forEach(r => r.remove());
 
         const previewRow = document.createElement('tr');
