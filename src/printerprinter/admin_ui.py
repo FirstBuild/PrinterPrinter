@@ -341,6 +341,16 @@ def render_admin_ui_html() -> str:
       el.className = 'status' + (level ? ` ${level}` : '');
     }
 
+    function escapeHTML(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
     async function api(url, options) {
       const response = await fetch(url, options);
       const text = await response.text();
@@ -407,12 +417,12 @@ def render_admin_ui_html() -> str:
       for (const event of payload.items || []) {
         const tr = document.createElement('tr');
         tr.innerHTML = `
-          <td class=\"mono\">${event.id}</td>
-          <td>${fmt(event.printer_name || event.printer_id)}</td>
-          <td>${fmt(event.file_name)}</td>
-          <td>${fmt(event.started_at)}</td>
-          <td>${fmt(event.est_duration_sec)}</td>
-          <td>${fmt(event.filament_estimated_g)}</td>
+          <td class=\"mono\">${escapeHTML(event.id)}</td>
+          <td>${escapeHTML(fmt(event.printer_name || event.printer_id))}</td>
+          <td>${escapeHTML(fmt(event.file_name))}</td>
+          <td>${escapeHTML(fmt(event.started_at))}</td>
+          <td>${escapeHTML(fmt(event.est_duration_sec))}</td>
+          <td>${escapeHTML(fmt(event.filament_estimated_g))}</td>
           <td>
             <div class=\"btns\">
               <button class=\"secondary\" data-preview=\"${event.id}\">Preview</button>

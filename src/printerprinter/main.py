@@ -13,7 +13,9 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from printerprinter.admin_ui import render_admin_ui_html
 
 from printerprinter.admin_ui import render_admin_ui_html
 from printerprinter.bambuddy_client import BambuddyClient
@@ -62,6 +64,17 @@ EDITABLE_CONFIG_KEYS: tuple[str, ...] = (
 
 class ConfigUpdateRequest(BaseModel):
     values: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("values")
+    @classmethod
+    def validate_config_values(cls, v: dict[str, str]) -> dict[str, str]:
+        # Validate values for keys used in shell commands to prevent command manipulation.
+        safe_pattern = re.compile(r"^[a-zA-Z0-9._\-/ :]+$")
+        for key, value in v.items():
+            if key in ("BAMBUDDY_BASE_URL", "update_branch", "service_name") or any(k in key for k in ("URI", "PATH")):
+                if not safe_pattern.match(value):
+                    raise ValueError(f"Invalid characters in value for {key}")
+        return v
 
 
 def _resolve_env_file_path() -> Path:
