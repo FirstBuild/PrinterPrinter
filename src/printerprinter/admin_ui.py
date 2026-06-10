@@ -204,8 +204,15 @@ def render_admin_ui_html() -> str:
       max-width: 100%;
       border: 1px solid var(--line);
       border-radius: 10px;
-      margin-top: 8px;
+      margin: 8px auto;
       background: #fff;
+      display: block;
+    }
+
+    .preview-row td {
+      padding: 0;
+      text-align: center;
+      background: #fafafa;
     }
   </style>
 </head>
@@ -296,7 +303,6 @@ def render_admin_ui_html() -> str:
             <tbody id=\"events-body\"></tbody>
           </table>
         </div>
-        <img id=\"preview\" class=\"preview\" alt=\"Label preview\" style=\"display:none;\" />
       </article>
       <article class=\"card logs\">
         <h2>System Logs</h2>
@@ -319,8 +325,7 @@ def render_admin_ui_html() -> str:
       monitorIds: document.getElementById('monitor-ids'),
       pollSeconds: document.getElementById('poll-seconds'),
       waitSeconds: document.getElementById('wait-seconds'),
-      eventsBody: document.getElementById('events-body'),
-      preview: document.getElementById('preview'),
+      previewBody: document.getElementById('events-body'),
       opsStatus: document.getElementById('ops-status'),
       configStatus: document.getElementById('config-status'),
       eventsStatus: document.getElementById('events-status'),
@@ -495,9 +500,14 @@ def render_admin_ui_html() -> str:
       const reprintId = btn.getAttribute('data-reprint');
 
       if (previewId) {
-        ids.preview.src = `/admin/label-preview/${previewId}.png?ts=${Date.now()}`;
-        ids.preview.style.display = 'block';
-        ids.preview.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        const row = btn.closest('tr');
+        document.querySelectorAll('.preview-row').forEach(r => r.remove());
+
+        const previewRow = document.createElement('tr');
+        previewRow.className = 'preview-row';
+        previewRow.innerHTML = `<td colspan=\"7\"><img src=\"/admin/label-preview/${previewId}.png?ts=${Date.now()}\" class=\"preview\" alt=\"Label preview\"></td>`;
+        row.after(previewRow);
+        previewRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       }
 
       if (reprintId) {
