@@ -205,7 +205,7 @@ def render_admin_ui_html() -> str:
       max-width: 100%;
       border: 1px solid var(--line);
       border-radius: 10px;
-      margin: 20px auto;
+      margin: 0 auto;
       background: #fff;
       display: block;
       transform: rotate(90deg);
@@ -215,6 +215,7 @@ def render_admin_ui_html() -> str:
       padding: 0;
       text-align: center;
       background: #fafafa;
+      overflow: hidden;
     }
   </style>
 </head>
