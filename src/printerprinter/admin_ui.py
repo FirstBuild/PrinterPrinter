@@ -78,6 +78,7 @@ def render_admin_ui_html() -> str:
     .controls { grid-column: span 12; }
     .config { grid-column: span 12; }
     .events { grid-column: span 12; }
+    .logs { grid-column: span 12; }
 
     @media (min-width: 1000px) {
       .controls { grid-column: span 4; }
@@ -325,7 +326,7 @@ def render_admin_ui_html() -> str:
       monitorIds: document.getElementById('monitor-ids'),
       pollSeconds: document.getElementById('poll-seconds'),
       waitSeconds: document.getElementById('wait-seconds'),
-      previewBody: document.getElementById('events-body'),
+      eventsBody: document.getElementById('events-body'),
       opsStatus: document.getElementById('ops-status'),
       configStatus: document.getElementById('config-status'),
       eventsStatus: document.getElementById('events-status'),
