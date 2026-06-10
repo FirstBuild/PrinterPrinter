@@ -489,14 +489,15 @@ def render_admin_ui_html() -> str:
     });
 
     ids.eventsBody.addEventListener('click', async (event) => {
-      const target = event.target;
-      if (!(target instanceof HTMLElement)) return;
-      const previewId = target.getAttribute('data-preview');
-      const reprintId = target.getAttribute('data-reprint');
+      const btn = event.target.closest('button');
+      if (!btn) return;
+      const previewId = btn.getAttribute('data-preview');
+      const reprintId = btn.getAttribute('data-reprint');
 
       if (previewId) {
         ids.preview.src = `/admin/label-preview/${previewId}.png?ts=${Date.now()}`;
         ids.preview.style.display = 'block';
+        ids.preview.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       }
 
       if (reprintId) {
