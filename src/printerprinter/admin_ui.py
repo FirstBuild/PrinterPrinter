@@ -117,6 +117,7 @@ d7a4e;
 
     input, textarea {
       width: 100%;
+      box-sizing: border-box;
       border: 1px solid var(--line);
       border-radius: 10px;
       background: #fff;
@@ -296,6 +297,17 @@ d7a4e;
       <article class=\"card events\">
         <h2>Recent Labels</h2>
         <div class=\"status\" id=\"events-status\"></div>
+        <div style=\"display: flex; gap: 10px; align-items: center; margin-bottom: 12px;\">
+          <label for=\"events-limit\" style=\"margin: 0;\">Recent Labels:</label>
+          <select id=\"events-limit\" style=\"padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); font-family: inherit;\">
+            <option value=\"5\">5</option>
+            <option value=\"10\">10</option>
+            <option value=\"25\" selected>25</option>
+            <option value=\"50\">50</option>
+            <option value=\"100\">100</option>
+            <option value=\"all\">All</option>
+          </select>
+        </div>
         <div style=\"overflow:auto;\">
           <table>
             <thead>
@@ -335,6 +347,7 @@ d7a4e;
       pollSeconds: document.getElementById('poll-seconds'),
       waitSeconds: document.getElementById('wait-seconds'),
       eventsBody: document.getElementById('events-body'),
+      eventsLimit: document.getElementById('events-limit'),
       opsStatus: document.getElementById('ops-status'),
       configStatus: document.getElementById('config-status'),
       eventsStatus: document.getElementById('events-status'),
@@ -418,7 +431,9 @@ d7a4e;
     }
 
     async function loadEvents() {
-      const payload = await api('/admin/events?limit=50');
+      const limit = ids.eventsLimit.value;
+      const url = limit === 'all' ? '/admin/events' : `/admin/events?limit=${limit}`;
+      const payload = await api(url);
       ids.eventsBody.innerHTML = '';
       for (const event of payload.items || []) {
         const tr = document.createElement('tr');
@@ -433,6 +448,14 @@ d7a4e;
             <div class=\"btns\">
               <button class=\"secondary\" data-preview=\"${event.id}\">Preview</button>
               <button class=\"primary\" data-reprint=\"${event.id}\">Reprint</button>
+            </div>
+          </td>
+        `;
+        ids.eventsBody.appendChild(tr);
+      }
+      setStatus(ids.eventsStatus, `Loaded ${payload.count} events`, 'ok');
+    }
+.id}\">Reprint</button>
             </div>
           </td>
         `;
