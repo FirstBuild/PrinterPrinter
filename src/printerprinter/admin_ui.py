@@ -10,12 +10,18 @@ def render_admin_ui_html() -> str:
   <title>PrinterPrinter Admin</title>
   <style>
     :root {
-      --bg: #f4f7f4;
+      --bg: #f0f4f8;
       --surface: #ffffff;
-      --ink: #13201a;
-      --muted: #5a6b61;
-      --line: #d2ddd6;
-      --accent: #0d7a4e;
+      --ink: #1a2b3c;
+      --muted: #64748b;
+      --line: #cbd5e1;
+      --accent: #3B73B9;
+      --accent-2: #2a5da8;
+      --warn: #c2410c;
+      --ok: #10b981;
+      --radius: 14px;
+    }
+d7a4e;
       --accent-2: #0a5f3d;
       --warn: #a63a2d;
       --ok: #0b7f40;
@@ -28,8 +34,8 @@ def render_admin_ui_html() -> str:
       margin: 0;
       color: var(--ink);
       background:
-        radial-gradient(circle at 10% 20%, #dbeee2 0, transparent 36%),
-        radial-gradient(circle at 90% 0%, #e5f0ff 0, transparent 34%),
+        radial-gradient(circle at 10% 20%, #eef5ff 0, transparent 36%),
+        radial-gradient(circle at 90% 0%, #f0faff 0, transparent 34%),
         var(--bg);
       font-family: 'Avenir Next', 'Segoe UI', sans-serif;
     }
@@ -43,11 +49,11 @@ def render_admin_ui_html() -> str:
     }
 
     .hero {
-      background: linear-gradient(135deg, #0c3d2a, #1e6e45);
+      background: linear-gradient(135deg, #1a2b3c, #3B73B9);
       color: #fff;
       border-radius: var(--radius);
       padding: 20px;
-      box-shadow: 0 12px 28px rgba(18, 58, 40, 0.24);
+      box-shadow: 0 12px 28px rgba(26, 43, 60, 0.24);
     }
 
     .hero h1 {
@@ -58,7 +64,7 @@ def render_admin_ui_html() -> str:
 
     .hero p {
       margin: 8px 0 0;
-      color: #d6f4e4;
+      color: #e2e8f0;
     }
 
     .grid {
