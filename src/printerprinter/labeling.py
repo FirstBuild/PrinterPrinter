@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from brother_ql.devicedependent import label_type_specs
 from PIL import Image, ImageDraw, ImageFont
@@ -54,6 +54,11 @@ def _format_datetime(value: object | None) -> str:
         dt = datetime.fromisoformat(candidate)
     except ValueError:
         return text
+
+    # Treat naive timestamps as UTC, then display in the system local timezone.
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    dt = dt.astimezone()
 
     # Use a compact friendly format that still includes month/day and time.
     # Example: Wed May 28, 10:05 AM

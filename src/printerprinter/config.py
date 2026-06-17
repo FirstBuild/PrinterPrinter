@@ -33,6 +33,17 @@ class Settings(BaseSettings):
         alias="PRINTERPRINTER_MONITORED_PRINTER_IDENTIFIERS",
     )
     poll_interval_seconds: float = Field(default=5.0, alias="PRINTERPRINTER_POLL_INTERVAL_SECONDS")
+    label_wait_seconds: float = Field(default=60.0, alias="PRINTERPRINTER_LABEL_WAIT_SECONDS")
+    label_wait_poll_seconds: float = Field(default=5.0, alias="PRINTERPRINTER_LABEL_WAIT_POLL_SECONDS")
+    pending_label_max_age_seconds: float = Field(
+        default=900.0,
+        alias="PRINTERPRINTER_PENDING_LABEL_MAX_AGE_SECONDS",
+    )
+    env_file_path: str = Field(default=".env", alias="PRINTERPRINTER_ENV_FILE_PATH")
+    service_name: str = Field(default="printerprinter", alias="PRINTERPRINTER_SERVICE_NAME")
+    install_dir: str = Field(default="/opt/printerprinter", alias="PRINTERPRINTER_INSTALL_DIR")
+    update_branch: str = Field(default="main", alias="PRINTERPRINTER_UPDATE_BRANCH")
+    venv_path: str = Field(default="/opt/printerprinter/venv", alias="PRINTERPRINTER_VENV_PATH")
 
     brother_enabled: bool = Field(default=True, alias="BROTHER_ENABLED")
     brother_model: str = Field(default="QL-820NWB", alias="BROTHER_MODEL")
