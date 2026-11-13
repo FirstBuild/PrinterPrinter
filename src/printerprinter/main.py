@@ -16,13 +16,16 @@ from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field, field_validator
 
 from printerprinter.admin_ui import render_admin_ui_html
-
-from printerprinter.admin_ui import render_admin_ui_html
 from printerprinter.bambuddy_client import BambuddyClient
 from printerprinter.config import get_settings
-from printerprinter.labeling import render_label_image
+from printerprinter.labeling import DYMO_MEDIA_SPECS, render_label_image
 from printerprinter.logging_config import configure_logging
-from printerprinter.printing import BrotherPrintService
+from printerprinter.printing import (
+    PrintService,
+    create_print_service,
+    probe_printer_status,
+    setup_dymo_usb_cups_queue,
+)
 from printerprinter.storage import (
     get_print_start_event,
     has_label_job_attempt,
@@ -52,6 +55,16 @@ EDITABLE_CONFIG_KEYS: tuple[str, ...] = (
     "PRINTERPRINTER_LABEL_WAIT_SECONDS",
     "PRINTERPRINTER_LABEL_WAIT_POLL_SECONDS",
     "PRINTERPRINTER_PENDING_LABEL_MAX_AGE_SECONDS",
+    "PRINTER_BACKEND",
+    "PRINTER_ENABLED",
+    "PRINTER_INTERFACE",
+    "PRINTER_LABEL_SIZE",
+    "DYMO_MODEL",
+    "DYMO_USB_QUEUE_NAME",
+    "DYMO_WIFI_QUEUE_NAME",
+    "DYMO_PRINT_QUALITY",
+    "DYMO_PRINT_DENSITY",
+    "DYMO_JOB_EXPIRE_SECONDS",
     "BROTHER_ENABLED",
     "BROTHER_MODEL",
     "BROTHER_PRINTER_URI",
@@ -68,13 +81,40 @@ class ConfigUpdateRequest(BaseModel):
     @field_validator("values")
     @classmethod
     def validate_config_values(cls, v: dict[str, str]) -> dict[str, str]:
-        # Validate values for keys used in shell commands to prevent command manipulation.
+        # Validate values for keys used in subprocess/env flows to prevent manipulation.
         safe_pattern = re.compile(r"^[a-zA-Z0-9._\-/ :]+$")
+        strict_keys = {
+            "BAMBUDDY_BASE_URL",
+            "update_branch",
+            "service_name",
+            "PRINTER_BACKEND",
+            "PRINTER_INTERFACE",
+            "PRINTER_LABEL_SIZE",
+            "DYMO_MODEL",
+            "DYMO_USB_QUEUE_NAME",
+            "DYMO_WIFI_QUEUE_NAME",
+            "DYMO_PRINT_QUALITY",
+            "DYMO_PRINT_DENSITY",
+            "BROTHER_MODEL",
+            "BROTHER_LABEL_SIZE",
+        }
         for key, value in v.items():
-            if key in ("BAMBUDDY_BASE_URL", "update_branch", "service_name") or any(k in key for k in ("URI", "PATH")):
-                if not safe_pattern.match(value):
+            if "\n" in value or "\r" in value:
+                raise ValueError(f"Newline characters are not allowed in {key}")
+            stripped = value.strip()
+            if not stripped:
+                continue
+            if key in strict_keys or any(k in key for k in ("URI", "PATH", "QUEUE")):
+                if not safe_pattern.match(stripped):
                     raise ValueError(f"Invalid characters in value for {key}")
         return v
+
+
+class DymoSetupRequest(BaseModel):
+    queue_name: str = ""
+    model: str = ""
+    label_size: str = ""
+    save_to_env: bool = True
 
 
 def _resolve_env_file_path() -> Path:
@@ -627,7 +667,7 @@ async def reconcile_recent_events(client: BambuddyClient, db_path: str) -> int:
 
 async def _attempt_print_for_event(
     db_path: str,
-    print_service: BrotherPrintService,
+    print_service: PrintService,
     event: dict[str, object],
 ) -> bool:
     print_result = await asyncio.to_thread(print_service.print_event, event)
@@ -676,7 +716,7 @@ async def _wait_for_event_data(
 
 async def process_pending_labels(
     db_path: str,
-    print_service: BrotherPrintService,
+    print_service: PrintService,
     *,
     max_age_seconds: float,
     limit: int = 50,
@@ -735,7 +775,7 @@ async def run_poll_iteration(
     monitored_ids: set[str],
     monitored_identifiers: set[str],
     last_states: dict[str, str],
-    print_service: BrotherPrintService,
+    print_service: PrintService,
     label_wait_seconds: float,
     label_wait_poll_seconds: float,
 ) -> dict[str, int]:
@@ -820,7 +860,7 @@ async def poller_loop(
     monitored_ids: set[str],
     monitored_identifiers: set[str],
     last_states: dict[str, str],
-    print_service: BrotherPrintService,
+    print_service: PrintService,
     label_wait_seconds: float,
     label_wait_poll_seconds: float,
     pending_label_max_age_seconds: float,
@@ -878,15 +918,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     monitored_ids = _parse_monitored_ids(settings.monitored_printer_ids)
     monitored_identifiers = _parse_monitored_identifiers(settings.monitored_printer_identifiers)
     last_states: dict[str, str] = {}
-    print_service = BrotherPrintService(
-        enabled=settings.brother_enabled,
-        model=settings.brother_model,
-        printer_uri=settings.brother_printer_uri,
-        label_size=settings.brother_label_size,
-        cut=settings.brother_cut,
-        show_price=settings.show_price_on_label,
-        price_per_gram=settings.filament_price_per_gram,
-    )
+    print_service = create_print_service(settings)
 
     app.state.print_service = print_service
     app.state.db_path = settings.db_path
@@ -939,6 +971,18 @@ async def probe_bambuddy() -> dict[str, object]:
     return asdict(result)
 
 
+@app.get("/probes/printer")
+@app.get("/admin/printer-status")
+async def admin_printer_status() -> dict[str, object]:
+    settings = get_settings()
+    status = await asyncio.to_thread(probe_printer_status, settings)
+    status["supported_dymo_sizes"] = [
+        {"code": spec.code, "ppd_page_size": spec.ppd_page_size, "description": spec.description}
+        for spec in DYMO_MEDIA_SPECS.values()
+    ]
+    return status
+
+
 @app.post("/admin/poll-once")
 async def admin_poll_once() -> dict[str, int]:
     settings = get_settings()
@@ -955,15 +999,7 @@ async def admin_poll_once() -> dict[str, int]:
     monitored_ids = _parse_monitored_ids(settings.monitored_printer_ids)
     monitored_identifiers = _parse_monitored_identifiers(settings.monitored_printer_identifiers)
     state_cache: dict[str, str] = {}
-    print_service = BrotherPrintService(
-        enabled=settings.brother_enabled,
-        model=settings.brother_model,
-        printer_uri=settings.brother_printer_uri,
-        label_size=settings.brother_label_size,
-        cut=settings.brother_cut,
-        show_price=settings.show_price_on_label,
-        price_per_gram=settings.filament_price_per_gram,
-    )
+    print_service = create_print_service(settings)
     try:
         return await run_poll_iteration(
             client,
@@ -1041,10 +1077,24 @@ async def admin_ui_shortcut() -> HTMLResponse:
 
 @app.get("/admin/config")
 async def admin_get_config() -> dict[str, object]:
+    settings = get_settings()
     env_path = _resolve_env_file_path()
     lines = _read_env_lines(env_path)
     values = _parse_env_map(lines)
     filtered_values = {key: values.get(key, "") for key in EDITABLE_CONFIG_KEYS}
+
+    # Populate effective defaults for newly added printer keys when reading legacy .env files.
+    if not filtered_values.get("PRINTER_BACKEND"):
+        filtered_values["PRINTER_BACKEND"] = settings.printer_backend
+    if not filtered_values.get("PRINTER_ENABLED"):
+        filtered_values["PRINTER_ENABLED"] = values.get("BROTHER_ENABLED", str(settings.printer_enabled).lower())
+    if not filtered_values.get("PRINTER_INTERFACE"):
+        filtered_values["PRINTER_INTERFACE"] = settings.printer_interface
+    if not filtered_values.get("PRINTER_LABEL_SIZE"):
+        filtered_values["PRINTER_LABEL_SIZE"] = values.get("BROTHER_LABEL_SIZE", settings.label_size)
+    if not filtered_values.get("DYMO_MODEL"):
+        filtered_values["DYMO_MODEL"] = settings.dymo_model
+
     missing = [key for key, value in filtered_values.items() if not value]
     return {
         "env_file_path": str(env_path),
@@ -1070,6 +1120,43 @@ async def admin_update_config(payload: ConfigUpdateRequest) -> dict[str, object]
         "env_file_path": str(env_path),
         "detail": "Saved. Restart service to apply runtime polling/printing changes.",
     }
+
+
+@app.post("/admin/actions/setup-dymo")
+async def admin_action_setup_dymo(payload: DymoSetupRequest | None = None) -> dict[str, object]:
+    settings = get_settings()
+    req = payload or DymoSetupRequest()
+    target_model = req.model.strip() or settings.dymo_model
+    target_size = req.label_size.strip() or (
+        settings.label_size if settings.printer_backend == "dymo" else "30336"
+    )
+    preferred_queue = req.queue_name.strip() or settings.dymo_usb_queue_name
+
+    try:
+        result = await asyncio.to_thread(
+            setup_dymo_usb_cups_queue,
+            preferred_queue_name=preferred_queue,
+            model=target_model,
+            label_size=target_size,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=_exc_message(exc)) from exc
+
+    if req.save_to_env:
+        env_path = _resolve_env_file_path()
+        _write_env_updates(
+            env_path,
+            {
+                "PRINTER_BACKEND": "dymo",
+                "PRINTER_INTERFACE": "usb",
+                "PRINTER_LABEL_SIZE": target_size,
+                "DYMO_MODEL": target_model,
+                "DYMO_USB_QUEUE_NAME": str(result["queue_name"]),
+            },
+        )
+        get_settings.cache_clear()
+
+    return result
 
 
 @app.post("/admin/actions/restart")
@@ -1135,15 +1222,16 @@ async def admin_action_update() -> dict[str, object]:
 
 
 @app.get("/admin/label-preview/{event_id}.png")
-async def admin_label_preview(event_id: int) -> Response:
+async def admin_label_preview(event_id: int, label_size: str | None = Query(default=None)) -> Response:
     settings = get_settings()
     event = get_print_start_event(settings.db_path, event_id)
     if event is None:
         raise HTTPException(status_code=404, detail="Event not found")
 
+    effective_size = (label_size or "").strip() or settings.label_size
     image = render_label_image(
         event,
-        settings.brother_label_size,
+        effective_size,
         show_price=settings.show_price_on_label,
         price_per_gram=settings.filament_price_per_gram,
     )
@@ -1159,15 +1247,7 @@ async def admin_print_event(event_id: int) -> dict[str, object]:
     if event is None:
         raise HTTPException(status_code=404, detail="Event not found")
 
-    print_service = BrotherPrintService(
-        enabled=settings.brother_enabled,
-        model=settings.brother_model,
-        printer_uri=settings.brother_printer_uri,
-        label_size=settings.brother_label_size,
-        cut=settings.brother_cut,
-        show_price=settings.show_price_on_label,
-        price_per_gram=settings.filament_price_per_gram,
-    )
+    print_service = create_print_service(settings)
     result = await asyncio.to_thread(print_service.print_event, event)
     status = "printed" if result.ok else "failed"
     job_id = record_label_job_attempt(

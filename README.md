@@ -1,6 +1,6 @@
 # PrinterPrinter
 
-PrinterPrinter is a local daemon that runs alongside Bambuddy, watches configured Bambu printers for print starts, and auto-prints job labels to a Brother QL-820NWB.
+PrinterPrinter is a local daemon that runs alongside Bambuddy, watches configured Bambu printers for print starts, and auto-prints job labels to a USB-connected **Dymo LabelWriter** (such as the LabelWriter 400 Turbo via CUPS) or a network **Brother QL-820NWB**.
 
 ## Architecture
 
@@ -9,13 +9,17 @@ flowchart LR
 	A["Bambu P1S Printers"] -->|"Status + Print State"| B["Bambuddy API"]
 	B -->|"Poll every N seconds"| C["PrinterPrinter Daemon"]
 	C --> D[("SQLite Event Store")]
-	C --> E["Brother QL-820NWB"]
-	C --> F["Admin Endpoints\n/health /admin/events /admin/print-event/{id}"]
+	C --> E["Dymo LabelWriter 400 Turbo (USB/CUPS)\nor Brother QL-820NWB (TCP)"]
+	C --> F["Admin UI & Endpoints\n/admin /probes/printer /admin/print-event/{id}"]
 ```
 
 ## Example Output
 
-Latest label preview (DK1202 / 62x100):
+Dymo 30336 compact label (`1" x 2-1/8"` / `25x54mm`):
+
+![Dymo 30336 compact label preview](data/label_preview_dymo_30336.png)
+
+Brother DK-1202 / Dymo 30256 full shipping label (`62x100mm` / `59x102mm`):
 
 ![Latest label preview](data/label_preview_latest.png)
 
@@ -33,6 +37,7 @@ Latest label preview (DK1202 / 62x100):
 
 - `GET /health`
 - `GET /probes/bambuddy`
+- `GET /probes/printer`
 - `POST /admin/poll-once`
 - `GET /admin/printers`
 - `GET /admin/events`
@@ -40,6 +45,7 @@ Latest label preview (DK1202 / 62x100):
 - `GET /admin`
 - `GET /admin/config`
 - `POST /admin/config`
+- `POST /admin/actions/setup-dymo`
 - `POST /admin/actions/restart`
 - `POST /admin/actions/update`
 - `GET /admin/label-preview/{event_id}.png`
@@ -78,13 +84,44 @@ Copy `.env.example` to `.env` and update values.
 - `BAMBUDDY_PRINTERS_ENDPOINT` (default `/api/v1/printers/`)
 - `BAMBUDDY_PRINTER_STATUS_ENDPOINT_TEMPLATE` (default `/api/v1/printers/{printer_id}/status`)
 
-### Brother QL-820NWB
+### Label Printer Selection (Dymo USB or Brother Network)
 
-- `BROTHER_ENABLED` (`true`/`false`)
+- `PRINTER_BACKEND` (`dymo` or `brother`, default `brother`)
+- `PRINTER_ENABLED` (`true`/`false`, fallback alias `BROTHER_ENABLED`)
+- `PRINTER_INTERFACE` (`usb`, `auto`, `wifi`; default `usb` for Dymo)
+- `PRINTER_LABEL_SIZE` (media SKU, fallback aliases `DYMO_LABEL_SIZE` / `BROTHER_LABEL_SIZE`)
+
+#### Dymo LabelWriter 400 Turbo (Raspberry Pi / Linux via CUPS)
+
+- `DYMO_MODEL` (default `LabelWriter-400-Turbo`)
+- `DYMO_USB_QUEUE_NAME` (optional; auto-discovers USB Dymo CUPS queue when blank, or set e.g. `DYMO_LabelWriter_400_Turbo`)
+- `DYMO_WIFI_QUEUE_NAME` (required only when `PRINTER_INTERFACE=wifi`)
+- `DYMO_PRINT_QUALITY` (`Graphics` or `Text`, default `Graphics`)
+- `DYMO_PRINT_DENSITY` (`Light`, `Medium`, `Normal`, `Dark`, default `Normal`)
+- `DYMO_JOB_EXPIRE_SECONDS` (default `300`; auto-cancels unprinted CUPS jobs after 5 minutes if out of paper so old jobs never pile up)
+
+Supported Dymo media SKUs (automatically mapped to exact 300 DPI `lw400t.ppd` `PageSize` dimensions and compact/full layouts):
+- `30336` (`1" x 2-1/8"` / `25x54mm` Small Multipurpose — uses high-density compact layout)
+- `30252` / `30320` / `99010` (`1-1/8" x 3-1/2"` / `28x89mm` Standard Address)
+- `30321` / `99012` (`1-4/10" x 3-1/2"` / `36x89mm` Large Address)
+- `30256` (`2-5/16" x 4"` / `59x102mm` Shipping — full layout)
+- `30323` / `99014` (`2-1/8" x 4"` / `54x101mm` Shipping — full layout)
+- `30334` / `11354` (`2-1/4" x 1-1/4"` / `57x32mm` Multi-Purpose)
+
+Quick Dymo USB setup on an existing Raspberry Pi installation:
+
+```bash
+sudo bash /opt/printerprinter/scripts/setup-dymo-cups.sh DYMO_LabelWriter_400_Turbo 30336
+```
+
+Or click **Setup Dymo USB** directly in the Admin UI (`http://<pi-host>:8080/admin`).
+
+#### Brother QL-820NWB
+
 - `BROTHER_MODEL` (default `QL-820NWB`)
 - `BROTHER_PRINTER_URI` (example `tcp://10.206.58.111:9100`)
-- `BROTHER_LABEL_SIZE` (default `62x100`, DK1202)
 - `BROTHER_CUT` (`true`/`false`)
+- `PRINTER_LABEL_SIZE=62x100` (DK-1202)
 
 ### Pricing
 
@@ -292,7 +329,9 @@ curl -X POST http://localhost:8080/admin/print-event/123
 
 ## Troubleshooting
 
-- `Wrong roll type`: verify `BROTHER_LABEL_SIZE=62x100` for DK1202.
-- No prints: verify `BROTHER_ENABLED=true` and printer URI.
+- **Dymo USB not appearing in `lsusb`**: The Dymo LabelWriter 400 Turbo is **not** USB-bus-powered. Confirm its 24V DC power adapter is plugged into live AC power (front blue feed LED lit or flashing) and both the barrel plug and USB-B plug are firmly seated in the recessed channel underneath the base.
+- **Dymo out of paper**: When out of labels, the front LED flashes and PrinterPrinter detects the out-of-paper state via USB/CUPS (`GET /probes/printer`), failing cleanly (and expiring any queued CUPS job after `DYMO_JOB_EXPIRE_SECONDS`) so stale jobs will not mass-print when a new roll is loaded.
+- `Wrong roll type` / clipped print: verify `PRINTER_LABEL_SIZE` matches the physical roll (`30336` for `1" x 2-1/8"`, `30256` for `2-5/16" x 4"`, `62x100` for Brother DK-1202).
+- No prints: verify `PRINTER_ENABLED=true` and check `/probes/printer` or `/admin`.
 - Bambuddy timeout/DNS issues: use direct IP in `BAMBUDDY_BASE_URL`.
 - Price hidden unexpectedly: verify `SHOW_PRICE_ON_LABEL=true`.

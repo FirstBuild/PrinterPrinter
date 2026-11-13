@@ -191,8 +191,11 @@ show_existing_configuration() {
     echo "Bambuddy base URL: ${BAMBUDDY_BASE_URL:-unknown}"
     echo "Bambuddy API token: $(mask_secret "${BAMBUDDY_API_TOKEN:-}")"
     echo "Printer identifiers: ${PRINTERPRINTER_MONITORED_PRINTER_IDENTIFIERS:-all printers}"
+    echo "Printer backend: ${PRINTER_BACKEND:-brother}"
+    echo "Printer interface: ${PRINTER_INTERFACE:-usb}"
+    echo "Printer label size: ${PRINTER_LABEL_SIZE:-${BROTHER_LABEL_SIZE:-unknown}}"
+    echo "Dymo USB queue: ${DYMO_USB_QUEUE_NAME:-(auto-discover)}"
     echo "Brother printer URI: ${BROTHER_PRINTER_URI:-unknown}"
-    echo "Brother label size: ${BROTHER_LABEL_SIZE:-unknown}"
     echo "Show price on label: ${SHOW_PRICE_ON_LABEL:-unknown}"
     echo "Filament price per gram: ${FILAMENT_PRICE_PER_GRAM:-unknown}"
     echo ""
@@ -214,11 +217,35 @@ gather_configuration() {
     echo "You can specify multiple printers separated by commas."
     PRINTER_IDENTIFIERS=$(prompt_for_value "Printer identifier(s)" "")
     
-    # Brother Printer Configuration
-    print_info "Brother Label Printer Configuration"
-    BROTHER_PRINTER_IP=$(prompt_for_value "Brother printer IP address")
-    
-    LABEL_SIZE=$(prompt_for_value "Label size (e.g., 62x100, 62x29)" "62x100")
+    # Label Printer Backend Configuration
+    print_info "Label Printer Backend Configuration"
+    PRINTER_BACKEND=$(prompt_for_value "Printer backend (dymo/brother)" "dymo")
+    PRINTER_BACKEND=$(echo "$PRINTER_BACKEND" | tr '[:upper:]' '[:lower:]')
+
+    case "$PRINTER_BACKEND" in
+        dymo)
+            PRINTER_INTERFACE=$(prompt_for_value "Dymo connection interface (usb/auto/wifi)" "usb")
+            PRINTER_INTERFACE=$(echo "$PRINTER_INTERFACE" | tr '[:upper:]' '[:lower:]')
+            LABEL_SIZE=$(prompt_for_value "Dymo media SKU (30336, 30252, 30321, 30256, 30323, 30334)" "30336")
+            DYMO_MODEL=$(prompt_for_value "Dymo model" "LabelWriter-400-Turbo")
+            DYMO_USB_QUEUE_NAME=$(prompt_for_value "CUPS queue name for Dymo USB" "DYMO_LabelWriter_400_Turbo")
+            DYMO_WIFI_QUEUE_NAME=""
+            if [ "$PRINTER_INTERFACE" = "wifi" ] || [ "$PRINTER_INTERFACE" = "auto" ]; then
+                DYMO_WIFI_QUEUE_NAME=$(prompt_for_value "CUPS queue name for Dymo WiFi (optional)" "")
+            fi
+            BROTHER_PRINTER_IP="replace_with_brother_ip"
+            ;;
+        brother|*)
+            PRINTER_BACKEND="brother"
+            PRINTER_INTERFACE="wifi"
+            DYMO_MODEL="LabelWriter-400-Turbo"
+            DYMO_USB_QUEUE_NAME=""
+            DYMO_WIFI_QUEUE_NAME=""
+            print_info "Brother Label Printer Configuration"
+            BROTHER_PRINTER_IP=$(prompt_for_value "Brother printer IP address")
+            LABEL_SIZE=$(prompt_for_value "Label size (e.g., 62x100, 62x29)" "62x100")
+            ;;
+    esac
     
     # Pricing Configuration
     print_info "Pricing Configuration"
@@ -322,16 +349,28 @@ PRINTERPRINTER_POLL_INTERVAL_SECONDS=5
 PRINTERPRINTER_MONITORED_PRINTER_IDENTIFIERS=$PRINTER_IDENTIFIERS
 
 # ========================================
+# Label Printer Backend Configuration
+# ========================================
+PRINTER_BACKEND=$PRINTER_BACKEND
+PRINTER_ENABLED=true
+PRINTER_INTERFACE=$PRINTER_INTERFACE
+PRINTER_LABEL_SIZE=$LABEL_SIZE
+
+# ========================================
+# Dymo LabelWriter Configuration (CUPS)
+# ========================================
+DYMO_MODEL=$DYMO_MODEL
+DYMO_USB_QUEUE_NAME=$DYMO_USB_QUEUE_NAME
+DYMO_WIFI_QUEUE_NAME=$DYMO_WIFI_QUEUE_NAME
+DYMO_PRINT_QUALITY=Graphics
+DYMO_PRINT_DENSITY=Normal
+DYMO_JOB_EXPIRE_SECONDS=300
+
+# ========================================
 # Brother Label Printer Configuration
 # ========================================
-BROTHER_ENABLED=true
 BROTHER_MODEL=QL-820NWB
-
-# Brother printer IP and port (e.g., tcp://192.168.1.100:9100)
 BROTHER_PRINTER_URI=tcp://$BROTHER_PRINTER_IP:9100
-
-# Label configuration
-BROTHER_LABEL_SIZE=$LABEL_SIZE
 BROTHER_CUT=true
 
 # ========================================
@@ -343,6 +382,22 @@ EOF
     
     chmod 644 "$env_file"
     print_success "Configuration file created at $env_file"
+}
+
+setup_dymo_cups_if_needed() {
+    if [ "${PRINTER_BACKEND:-}" != "dymo" ]; then
+        return 0
+    fi
+    print_header "Setting Up Dymo CUPS Driver & Queue"
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update || print_warning "apt-get update had warnings"
+    apt-get install -y cups printer-driver-dymo || print_warning "Failed to install printer-driver-dymo"
+    systemctl enable --now cups || true
+
+    if [ -f "$INSTALL_DIR/scripts/setup-dymo-cups.sh" ] && [ "${PRINTER_INTERFACE:-usb}" != "wifi" ]; then
+        ENV_FILE="$INSTALL_DIR/.env" bash "$INSTALL_DIR/scripts/setup-dymo-cups.sh" "${DYMO_USB_QUEUE_NAME:-DYMO_LabelWriter_400_Turbo}" "${LABEL_SIZE:-30336}" || \
+            print_warning "Dymo USB printer not yet detected on USB; plug in power & USB and run: sudo bash $INSTALL_DIR/scripts/setup-dymo-cups.sh"
+    fi
 }
 
 create_data_directory() {
@@ -512,6 +567,7 @@ main() {
     create_data_directory
     setup_python_environment
     create_env_file
+    setup_dymo_cups_if_needed
     create_systemd_service
     start_service
     verify_installation
