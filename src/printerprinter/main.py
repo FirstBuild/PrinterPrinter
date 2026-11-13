@@ -1144,13 +1144,14 @@ async def admin_action_setup_dymo(payload: DymoSetupRequest | None = None) -> di
 
     if req.save_to_env:
         env_path = _resolve_env_file_path()
+        effective_model = str(result.get("detected_model") or target_model)
         _write_env_updates(
             env_path,
             {
                 "PRINTER_BACKEND": "dymo",
                 "PRINTER_INTERFACE": "usb",
                 "PRINTER_LABEL_SIZE": target_size,
-                "DYMO_MODEL": target_model,
+                "DYMO_MODEL": effective_model,
                 "DYMO_USB_QUEUE_NAME": str(result["queue_name"]),
             },
         )

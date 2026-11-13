@@ -721,6 +721,56 @@ def probe_printer_status(settings: Settings) -> dict[str, object]:
     return base
 
 
+def _ppd_filename_for_name(text: str) -> str | None:
+    lowered = text.lower()
+    if "se450" in lowered:
+        return "se450.ppd"
+    if "450" in lowered and "twin" in lowered:
+        return "lw450tt.ppd"
+    if "450" in lowered and "duo" in lowered:
+        return "lw450dl.ppd"
+    if "450" in lowered and "turbo" in lowered:
+        return "lw450t.ppd"
+    if "450" in lowered:
+        return "lw450.ppd"
+    if "400" in lowered and "twin" in lowered:
+        return "lwtt.ppd"
+    if "400" in lowered and "duo" in lowered:
+        return "lwduol.ppd"
+    if "400" in lowered and "turbo" in lowered:
+        return "lw400t.ppd"
+    if "400" in lowered:
+        return "lw400.ppd"
+    if "4xl" in lowered:
+        return "lw4xl.ppd"
+    return None
+
+
+def _canonical_dymo_model(usb_product_name: str, fallback_model: str) -> str:
+    ppd_from_usb = _ppd_filename_for_name(usb_product_name)
+    ppd_to_model = {
+        "lw450t.ppd": "LabelWriter-450-Turbo",
+        "lw450tt.ppd": "LabelWriter-450-Twin-Turbo",
+        "lw450dl.ppd": "LabelWriter-450-DUO",
+        "lw450.ppd": "LabelWriter-450",
+        "se450.ppd": "LabelWriter-SE450",
+        "lw400t.ppd": "LabelWriter-400-Turbo",
+        "lwtt.ppd": "LabelWriter-400-Twin-Turbo",
+        "lwduol.ppd": "LabelWriter-400-DUO",
+        "lw400.ppd": "LabelWriter-400",
+        "lw4xl.ppd": "LabelWriter-4XL",
+    }
+    if ppd_from_usb and ppd_from_usb in ppd_to_model:
+        return ppd_to_model[ppd_from_usb]
+    return fallback_model.strip() or "LabelWriter-450-Turbo"
+
+
+def _default_dymo_queue_name(usb_product_name: str, fallback_model: str) -> str:
+    canonical = _canonical_dymo_model(usb_product_name, fallback_model)
+    sanitized = re.sub(r"[^a-zA-Z0-9]+", "_", canonical).strip("_")
+    return f"DYMO_{sanitized}" if sanitized else "DYMO_LabelWriter"
+
+
 def _select_dymo_ppd_uri(model: str, usb_product_name: str) -> str:
     lpinfo_path = shutil.which("lpinfo")
     candidates: list[tuple[str, str]] = []
@@ -736,23 +786,7 @@ def _select_dymo_ppd_uri(model: str, usb_product_name: str) -> str:
         except (OSError, subprocess.SubprocessError):
             pass
 
-    target = f"{usb_product_name} {model}".lower()
-    if "400" in target and "turbo" in target and "twin" not in target:
-        preferred_ppd = "lw400t.ppd"
-    elif "400" in target and "twin" in target:
-        preferred_ppd = "lw400tt.ppd"
-    elif "400" in target:
-        preferred_ppd = "lw400.ppd"
-    elif "450" in target and "twin" in target:
-        preferred_ppd = "lw450tt.ppd"
-    elif "450" in target and "turbo" in target:
-        preferred_ppd = "lw450t.ppd"
-    elif "450" in target:
-        preferred_ppd = "lw450.ppd"
-    elif "4xl" in target:
-        preferred_ppd = "lw4xl.ppd"
-    else:
-        preferred_ppd = "lw400t.ppd"
+    preferred_ppd = _ppd_filename_for_name(usb_product_name) or _ppd_filename_for_name(model) or "lw450t.ppd"
 
     for uri, _ in candidates:
         if uri.lower().endswith(f"/{preferred_ppd}"):
@@ -769,9 +803,9 @@ def setup_dymo_usb_cups_queue(
 ) -> dict[str, object]:
     """Install printer-driver-dymo if needed (on Debian/RPi root) and register the USB CUPS queue."""
     steps: list[str] = []
-    queue_name = preferred_queue_name.strip() or "DYMO_LabelWriter_400_Turbo"
-    if not _SAFE_QUEUE_NAME_RE.match(queue_name):
-        raise ValueError(f"Invalid queue name '{queue_name}'")
+    requested_queue = preferred_queue_name.strip()
+    if requested_queue and not _SAFE_QUEUE_NAME_RE.match(requested_queue):
+        raise ValueError(f"Invalid queue name '{requested_queue}'")
 
     if not is_dymo_cups_driver_installed():
         apt_get = shutil.which("apt-get")
@@ -823,7 +857,9 @@ def setup_dymo_usb_cups_queue(
         )
     steps.append("detected_usb_uri")
 
-    usb_product = usb_devices[0].get("product", "") if usb_devices else ""
+    usb_product = usb_devices[0].get("product", "") if usb_devices else device_uri.replace("%20", " ")
+    detected_model = _canonical_dymo_model(usb_product, model)
+    queue_name = requested_queue or _default_dymo_queue_name(usb_product, model)
     ppd_uri = _select_dymo_ppd_uri(model, usb_product)
     spec = resolve_dymo_media(label_size) or DYMO_MEDIA_SPECS["30336"]
 
@@ -859,6 +895,7 @@ def setup_dymo_usb_cups_queue(
     return {
         "ok": True,
         "queue_name": queue_name,
+        "detected_model": detected_model,
         "device_uri": device_uri,
         "ppd_uri": ppd_uri,
         "page_size": spec.ppd_page_size,

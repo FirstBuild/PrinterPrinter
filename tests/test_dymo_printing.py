@@ -17,6 +17,8 @@ from printerprinter.main import app
 from printerprinter.printing import (
     BrotherPrintService,
     DymoPrintService,
+    _default_dymo_queue_name,
+    _select_dymo_ppd_uri,
     create_print_service,
     detect_dymo_usb_devices,
     parse_dymo_status_byte,
@@ -150,6 +152,18 @@ class DymoPrintServiceTests(unittest.TestCase):
             self.assertEqual(len(devices), 1)
             self.assertEqual(devices[0]["product_id"], "001a")
             self.assertEqual(devices[0]["product"], "LabelWriter 400 Turbo")
+
+    @patch("printerprinter.printing.shutil.which", return_value=None)
+    def test_ppd_selection_prefers_live_usb_model_over_fallback(self, _mock_which: MagicMock) -> None:
+        ppd_450t = _select_dymo_ppd_uri("LabelWriter-400-Turbo", "DYMO LabelWriter 450  Turbo")
+        self.assertEqual(ppd_450t, "dymo:0/cups/model/lw450t.ppd")
+        self.assertEqual(
+            _default_dymo_queue_name("DYMO LabelWriter 450  Turbo", "LabelWriter-400-Turbo"),
+            "DYMO_LabelWriter_450_Turbo",
+        )
+
+        ppd_400t = _select_dymo_ppd_uri("LabelWriter-450-Turbo", "LabelWriter 400 Turbo")
+        self.assertEqual(ppd_400t, "dymo:0/cups/model/lw400t.ppd")
 
     @patch("printerprinter.printing.query_dymo_usb_hardware_status", return_value={"paper_out": False, "paper_jam": False, "ready": True})
     @patch(
@@ -323,3 +337,4 @@ class AdminApiAndUiTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

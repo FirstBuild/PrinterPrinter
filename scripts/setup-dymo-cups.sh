@@ -1,10 +1,10 @@
 #!/bin/bash
-# Configure a USB-connected Dymo LabelWriter (e.g. 400 Turbo) in CUPS on Raspberry Pi / Debian.
+# Configure a USB-connected Dymo LabelWriter (400/450/4XL series) in CUPS on Raspberry Pi / Debian.
 # Usage: sudo bash scripts/setup-dymo-cups.sh [QUEUE_NAME] [LABEL_SIZE]
 
 set -euo pipefail
 
-QUEUE_NAME="${1:-DYMO_LabelWriter_400_Turbo}"
+QUEUE_NAME="${1:-}"
 LABEL_SIZE="${2:-30336}"
 ENV_FILE="${ENV_FILE:-/opt/printerprinter/.env}"
 
@@ -51,9 +51,50 @@ if [ -z "$DEVICE_URI" ]; then
 fi
 echo "Found Dymo USB URI: $DEVICE_URI"
 
-echo "[3/4] Registering CUPS queue '$QUEUE_NAME'..."
-PPD_URI="$(lpinfo -m | awk '/lw400t\.ppd/{print $1; exit}')"
-PPD_URI="${PPD_URI:-dymo:0/cups/model/lw400t.ppd}"
+DECODED_URI="$(printf '%s' "$DEVICE_URI" | sed 's/%20/ /g' | tr '[:upper:]' '[:lower:]')"
+if [[ "$DECODED_URI" == *"450"* && "$DECODED_URI" == *"twin"* ]]; then
+    TARGET_PPD="lw450tt.ppd"
+    DETECTED_MODEL="LabelWriter-450-Twin-Turbo"
+    DEFAULT_QUEUE="DYMO_LabelWriter_450_Twin_Turbo"
+elif [[ "$DECODED_URI" == *"450"* && "$DECODED_URI" == *"duo"* ]]; then
+    TARGET_PPD="lw450dl.ppd"
+    DETECTED_MODEL="LabelWriter-450-DUO"
+    DEFAULT_QUEUE="DYMO_LabelWriter_450_DUO"
+elif [[ "$DECODED_URI" == *"450"* && "$DECODED_URI" == *"turbo"* ]]; then
+    TARGET_PPD="lw450t.ppd"
+    DETECTED_MODEL="LabelWriter-450-Turbo"
+    DEFAULT_QUEUE="DYMO_LabelWriter_450_Turbo"
+elif [[ "$DECODED_URI" == *"450"* ]]; then
+    TARGET_PPD="lw450.ppd"
+    DETECTED_MODEL="LabelWriter-450"
+    DEFAULT_QUEUE="DYMO_LabelWriter_450"
+elif [[ "$DECODED_URI" == *"400"* && "$DECODED_URI" == *"twin"* ]]; then
+    TARGET_PPD="lwtt.ppd"
+    DETECTED_MODEL="LabelWriter-400-Twin-Turbo"
+    DEFAULT_QUEUE="DYMO_LabelWriter_400_Twin_Turbo"
+elif [[ "$DECODED_URI" == *"400"* && "$DECODED_URI" == *"turbo"* ]]; then
+    TARGET_PPD="lw400t.ppd"
+    DETECTED_MODEL="LabelWriter-400-Turbo"
+    DEFAULT_QUEUE="DYMO_LabelWriter_400_Turbo"
+elif [[ "$DECODED_URI" == *"400"* ]]; then
+    TARGET_PPD="lw400.ppd"
+    DETECTED_MODEL="LabelWriter-400"
+    DEFAULT_QUEUE="DYMO_LabelWriter_400"
+elif [[ "$DECODED_URI" == *"4xl"* ]]; then
+    TARGET_PPD="lw4xl.ppd"
+    DETECTED_MODEL="LabelWriter-4XL"
+    DEFAULT_QUEUE="DYMO_LabelWriter_4XL"
+else
+    TARGET_PPD="lw450t.ppd"
+    DETECTED_MODEL="LabelWriter-450-Turbo"
+    DEFAULT_QUEUE="DYMO_LabelWriter"
+fi
+
+QUEUE_NAME="${QUEUE_NAME:-$DEFAULT_QUEUE}"
+
+echo "[3/4] Registering CUPS queue '$QUEUE_NAME' ($TARGET_PPD)..."
+PPD_URI="$(lpinfo -m | awk -v ppd="$TARGET_PPD" '$1 ~ ("/" ppd "$") {print $1; exit}')"
+PPD_URI="${PPD_URI:-dymo:0/cups/model/$TARGET_PPD}"
 
 lpadmin -p "$QUEUE_NAME" -E \
     -v "$DEVICE_URI" \
@@ -70,19 +111,20 @@ echo "[4/4] Verifying queue status..."
 lpstat -p "$QUEUE_NAME" -v "$QUEUE_NAME"
 
 if [ -f "$ENV_FILE" ]; then
-    python3 - "$ENV_FILE" "$QUEUE_NAME" "$LABEL_SIZE" <<'PY'
+    python3 - "$ENV_FILE" "$QUEUE_NAME" "$LABEL_SIZE" "$DETECTED_MODEL" <<'PY'
 import sys
 from pathlib import Path
 
 env_path = Path(sys.argv[1])
 queue_name = sys.argv[2]
 label_size = sys.argv[3]
+detected_model = sys.argv[4]
 updates = {
     "PRINTER_BACKEND": "dymo",
     "PRINTER_ENABLED": "true",
     "PRINTER_INTERFACE": "usb",
     "PRINTER_LABEL_SIZE": label_size,
-    "DYMO_MODEL": "LabelWriter-400-Turbo",
+    "DYMO_MODEL": detected_model,
     "DYMO_USB_QUEUE_NAME": queue_name,
 }
 
@@ -113,3 +155,4 @@ PY
 fi
 
 echo "Done! Load labels and start the service when ready: sudo systemctl start printerprinter"
+
