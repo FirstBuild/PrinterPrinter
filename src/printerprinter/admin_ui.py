@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-
 def render_admin_ui_html() -> str:
     return """<!doctype html>
-<html lang=\"en\">
+<html lang="en">
 <head>
-  <meta charset=\"utf-8\" />
-  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>PrinterPrinter Admin</title>
   <style>
     :root {
@@ -19,12 +18,6 @@ def render_admin_ui_html() -> str:
       --accent-2: #2a5da8;
       --warn: #c2410c;
       --ok: #10b981;
-      --radius: 14px;
-    }
-d7a4e;
-      --accent-2: #0a5f3d;
-      --warn: #a63a2d;
-      --ok: #0b7f40;
       --radius: 14px;
     }
 
@@ -227,88 +220,88 @@ d7a4e;
   </style>
 </head>
 <body>
-  <div class=\"wrap\">
-    <section class=\"hero\">
+  <div class="wrap">
+    <section class="hero">
       <h1>PrinterPrinter Admin</h1>
       <p>Configure settings, reprint labels, restart service, and run updates.</p>
     </section>
 
-    <section class=\"grid\">
-      <article class=\"card controls\">
+    <section class="grid">
+      <article class="card controls">
         <h2>Instance Controls</h2>
-        <div class=\"btns\">
-          <button class=\"secondary\" id=\"refresh-all\">Refresh All</button>
-          <button class=\"secondary\" id=\"poll-once\">Poll Once</button>
-          <button class=\"secondary\" id=\"view-logs\">View Logs</button>
-          <button class=\"primary\" id=\"restart-service\">Restart Service</button>
-          <button class=\"danger\" id=\"update-service\">Update + Restart</button>
+        <div class="btns">
+          <button class="secondary" id="refresh-all">Refresh All</button>
+          <button class="secondary" id="poll-once">Poll Once</button>
+          <button class="secondary" id="view-logs">View Logs</button>
+          <button class="primary" id="restart-service">Restart Service</button>
+          <button class="danger" id="update-service">Update + Restart</button>
         </div>
-        <div class=\"status\" id=\"ops-status\"></div>
+        <div class="status" id="ops-status"></div>
       </article>
 
-      <article class=\"card config\">
+      <article class="card config">
         <h2>Configuration</h2>
-        <div class=\"row two\">
+        <div class="row two">
           <div>
-            <label for=\"base-url\">Bambuddy Base URL</label>
-            <input id=\"base-url\" />
+            <label for="base-url">Bambuddy Base URL</label>
+            <input id="base-url" />
           </div>
           <div>
-            <label for=\"api-token\">Bambuddy API Token</label>
-            <input id=\"api-token\" />
-          </div>
-        </div>
-        <div class=\"row two\">
-          <div>
-            <label for=\"printer-uri\">Brother Printer URI</label>
-            <input id=\"printer-uri\" />
-          </div>
-          <div>
-            <label for=\"label-size\">Label Size</label>
-            <input id=\"label-size\" />
+            <label for="api-token">Bambuddy API Token</label>
+            <input id="api-token" />
           </div>
         </div>
-        <div class=\"row two\">
+        <div class="row two">
           <div>
-            <label for=\"monitor-identifiers\">Monitored Printer Identifiers</label>
-            <textarea id=\"monitor-identifiers\" placeholder=\"comma-separated\"></textarea>
+            <label for="printer-uri">Brother Printer URI</label>
+            <input id="printer-uri" />
           </div>
           <div>
-            <label for=\"monitor-ids\">Monitored Printer IDs</label>
-            <textarea id=\"monitor-ids\" placeholder=\"comma-separated\"></textarea>
-          </div>
-        </div>
-        <div class=\"row two\">
-          <div>
-            <label for=\"poll-seconds\">Poll Interval Seconds</label>
-            <input id=\"poll-seconds\" />
-          </div>
-          <div>
-            <label for=\"wait-seconds\">Label Wait Seconds</label>
-            <input id=\"wait-seconds\" />
+            <label for="label-size">Label Size</label>
+            <input id="label-size" />
           </div>
         </div>
-        <div class=\"btns\">
-          <button class=\"primary\" id=\"save-config\">Save Config</button>
+        <div class="row two">
+          <div>
+            <label for="monitor-identifiers">Monitored Printer Identifiers</label>
+            <textarea id="monitor-identifiers" placeholder="comma-separated"></textarea>
+          </div>
+          <div>
+            <label for="monitor-ids">Monitored Printer IDs</label>
+            <textarea id="monitor-ids" placeholder="comma-separated"></textarea>
+          </div>
         </div>
-        <div class=\"status\" id=\"config-status\"></div>
+        <div class="row two">
+          <div>
+            <label for="poll-seconds">Poll Interval Seconds</label>
+            <input id="poll-seconds" />
+          </div>
+          <div>
+            <label for="wait-seconds">Label Wait Seconds</label>
+            <input id="wait-seconds" />
+          </div>
+        </div>
+        <div class="btns">
+          <button class="primary" id="save-config">Save Config</button>
+        </div>
+        <div class="status" id="config-status"></div>
       </article>
 
-      <article class=\"card events\">
+      <article class="card events">
         <h2>Recent Labels</h2>
-        <div class=\"status\" id=\"events-status\"></div>
-        <div style=\"display: flex; gap: 10px; align-items: center; margin-bottom: 12px;\">
-          <label for=\"events-limit\" style=\"margin: 0;\">Recent Labels:</label>
-          <select id=\"events-limit\" style=\"padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); font-family: inherit;\">
-            <option value=\"5\">5</option>
-            <option value=\"10\">10</option>
-            <option value=\"25\" selected>25</option>
-            <option value=\"50\">50</option>
-            <option value=\"100\">100</option>
-            <option value=\"all\">All</option>
+        <div class="status" id="events-status"></div>
+        <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 12px;">
+          <label for="events-limit" style="margin: 0;">Recent Labels:</label>
+          <select id="events-limit" style="padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); font-family: inherit;">
+            <option value="5">5</option>
+            <option value="10">10</option>
+            <option value="25" selected>25</option>
+            <option value="50">50</option>
+            <option value="100">100</option>
+            <option value="all">All</option>
           </select>
         </div>
-        <div style=\"overflow:auto;\">
+        <div style="overflow:auto;">
           <table>
             <thead>
               <tr>
@@ -321,16 +314,17 @@ d7a4e;
                 <th>Actions</th>
               </tr>
             </thead>
-            <tbody id=\"events-body\"></tbody>
+            <tbody id="events-body"></tbody>
           </table>
         </div>
       </article>
-      <article class=\"card logs\">
+
+      <article class="card logs">
         <h2>System Logs</h2>
-        <div class=\"status\" id=\"logs-status\"></div>
-        <pre id=\"logs-output\" class=\"mono logs-output\"></pre>
-        <div class=\"btns\">
-          <button class=\"secondary\" id=\"refresh-logs\">Refresh Logs</button>
+        <div class="status" id="logs-status"></div>
+        <pre id="logs-output" class="mono logs-output"></pre>
+        <div class="btns">
+          <button class="secondary" id="refresh-logs">Refresh Logs</button>
         </div>
       </article>
     </section>
@@ -433,35 +427,31 @@ d7a4e;
     async function loadEvents() {
       const limit = ids.eventsLimit.value;
       const url = limit === 'all' ? '/admin/events' : `/admin/events?limit=${limit}`;
-      const payload = await api(url);
-      ids.eventsBody.innerHTML = '';
-      for (const event of payload.items || []) {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td class=\"mono\">${escapeHTML(event.id)}</td>
-          <td>${escapeHTML(fmt(event.printer_name || event.printer_id))}</td>
-          <td>${escapeHTML(fmt(event.file_name))}</td>
-          <td>${escapeHTML(fmt(event.started_at))}</td>
-          <td>${escapeHTML(fmt(event.est_duration_sec))}</td>
-          <td>${escapeHTML(fmt(event.filament_estimated_g))}</td>
-          <td>
-            <div class=\"btns\">
-              <button class=\"secondary\" data-preview=\"${event.id}\">Preview</button>
-              <button class=\"primary\" data-reprint=\"${event.id}\">Reprint</button>
-            </div>
-          </td>
-        `;
-        ids.eventsBody.appendChild(tr);
+      try {
+        const payload = await api(url);
+        ids.eventsBody.innerHTML = '';
+        for (const event of (payload.items || [])) {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td class="mono">${escapeHTML(event.id)}</td>
+            <td>${escapeHTML(fmt(event.printer_name || event.printer_id))}</td>
+            <td>${escapeHTML(fmt(event.file_name))}</td>
+            <td>${escapeHTML(fmt(event.started_at})}</td>
+            <td>${escapeHTML(fmt(event.est_duration_sec))}</td>
+            <td>${escapeHTML(fmt(event.filament_estimated_g)}</td>
+            <td>
+              <div class="btns">
+                <button class="secondary" data-preview="${event.id}">Preview</button>
+                <button class="primary" data-reprint="${event.id}">Reprint</button>
+              </div>
+            </td>
+          `;
+          ids.eventsBody.appendChild(tr);
+        }
+        setStatus(ids.eventsStatus, `Loaded ${payload.count} events`, 'ok');
+      } catch (err) {
+        setStatus(ids.eventsStatus, err.message, 'error');
       }
-      setStatus(ids.eventsStatus, `Loaded ${payload.count} events`, 'ok');
-    }
-.id}\">Reprint</button>
-            </div>
-          </td>
-        `;
-        ids.eventsBody.appendChild(tr);
-      }
-      setStatus(ids.eventsStatus, `Loaded ${payload.count} events`, 'ok');
     }
 
     async function runAction(path, statusElement, okMessage) {
@@ -554,7 +544,7 @@ d7a4e;
 
         const previewRow = document.createElement('tr');
         previewRow.className = 'preview-row';
-        previewRow.innerHTML = `<td colspan=\"7\"><img src=\"/admin/label-preview/${previewId}.png?ts=${Date.now()}\" class=\"preview\" alt=\"Label preview\"></td>`;
+        previewRow.innerHTML = `<td colspan="7"><img src="/admin/label-preview/${previewId}.png?ts=${Date.now()}" class="preview" alt="Label preview"></td>`;
         row.after(previewRow);
         previewRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       }
@@ -578,5 +568,4 @@ d7a4e;
     })();
   </script>
 </body>
-</html>
-"""
+</html>"""
