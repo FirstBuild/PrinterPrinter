@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     dymo_model: str = Field(default="LabelWriter-400-Turbo", alias="DYMO_MODEL")
     dymo_usb_queue_name: str = Field(default="", alias="DYMO_USB_QUEUE_NAME")
     dymo_wifi_queue_name: str = Field(default="", alias="DYMO_WIFI_QUEUE_NAME")
-    dymo_print_quality: str = Field(default="Graphics", alias="DYMO_PRINT_QUALITY")
+    dymo_print_quality: str = Field(default="Text", alias="DYMO_PRINT_QUALITY")
     dymo_print_density: str = Field(default="Normal", alias="DYMO_PRINT_DENSITY")
     dymo_job_expire_seconds: int = Field(default=300, alias="DYMO_JOB_EXPIRE_SECONDS")
 

@@ -326,12 +326,31 @@ def _render_compact_label(
     price_per_gram: float,
 ) -> None:
     """High-density layout tailored for small/narrow labels like Dymo 30336 (1" x 2-1/8") and 30252."""
-    margin = max(6, int(width * 0.014))
-    bottom_margin = max(4, int(height * 0.015))
-    header_h = max(30, int(height * 0.125))
+    # Calibrated from physical Dymo 30336 prints via lw450t.ppd (w72h154.1):
+    # CUPS ImageableArea starts ~41 dots (3.5mm) inside the leading (right) sticker edge
+    # and extends ~4 dots past the trailing (left) sticker edge; vertically row 0 starts
+    # ~11 dots below the top edge with ~20 dots below the bottom edge.
+    if width <= 620:
+        left_pad = max(42, int(round(width * 0.076)))
+        right_pad = 1
+        top_pad = 6
+        bottom_margin = 2
+    else:
+        left_pad = max(8, int(width * 0.014))
+        right_pad = max(8, int(width * 0.014))
+        top_pad = 4
+        bottom_margin = max(4, int(height * 0.015))
 
-    # Top banner puts Printer on the left and Filament/Price on the right instead of a static title.
-    draw.rectangle((0, 0, width, header_h), fill="black")
+    x_left = left_pad
+    x_right = width - right_pad
+    content_w = max(120, x_right - x_left)
+    header_pad_x = max(7, int(content_w * 0.015))
+    header_h = max(30, int((height - top_pad) * 0.125))
+    header_top = top_pad
+    header_bottom = header_top + header_h
+
+    # Top banner aligns flush with the write-in boxes below and clears rounded sticker corners.
+    draw.rectangle((x_left, header_top, x_right, header_bottom), fill="black")
     printer_raw = _safe_text(event.get("printer_name") or event.get("printer_id"))
     filament_raw = _format_filament_with_optional_price(
         event.get("filament_estimated_g"),
@@ -347,22 +366,23 @@ def _render_compact_label(
         badge_fitted, badge_font = _fit_text(
             draw,
             badge_text,
-            max_width=max(80, int(width * 0.44)),
+            max_width=max(80, int(content_w * 0.45)),
             start_size=header_target_size,
             min_size=header_min_size,
             bold=True,
         )
         badge_box = draw.textbbox((0, 0), badge_fitted, font=badge_font)
         badge_w = badge_box[2] - badge_box[0]
-        badge_h = badge_box[3] - badge_box[1]
+        badge_cap = draw.textbbox((0, 0), "HG", font=badge_font)
+        badge_y = header_top + (header_h - (badge_cap[3] - badge_cap[1])) // 2 - badge_cap[1]
         draw.text(
-            (width - margin - badge_w, max(0, (header_h - badge_h) // 2 - badge_box[1] // 2)),
+            (x_right - header_pad_x - badge_w, badge_y),
             badge_fitted,
             fill="white",
             font=badge_font,
         )
 
-    printer_max_w = max(80, width - (margin * 2) - (badge_w + 12 if badge_w else 0))
+    printer_max_w = max(80, content_w - (header_pad_x * 2) - (badge_w + 10 if badge_w else 0))
     printer_fitted, printer_font = _fit_text(
         draw,
         printer_raw,
@@ -371,18 +391,18 @@ def _render_compact_label(
         min_size=header_min_size,
         bold=True,
     )
-    p_box = draw.textbbox((0, 0), printer_fitted, font=printer_font)
-    p_h = p_box[3] - p_box[1]
+    p_cap = draw.textbbox((0, 0), "HG", font=printer_font)
+    p_y = header_top + (header_h - (p_cap[3] - p_cap[1])) // 2 - p_cap[1]
     draw.text(
-        (margin, max(0, (header_h - p_h) // 2 - p_box[1] // 2)),
+        (x_left + header_pad_x, p_y),
         printer_fitted,
         fill="white",
         font=printer_font,
     )
 
-    y = header_h + max(4, int(height * 0.018))
-    line_h = max(22, int(height * 0.098))
-    body_size = max(15, int(height * 0.076))
+    y = header_bottom + max(4, int(height * 0.016))
+    line_h = max(21, int((height - top_pad) * 0.095))
+    body_size = max(15, int(height * 0.075))
     body_min_size = max(12, int(height * 0.052))
 
     duration_str = _format_duration(event.get("est_duration_sec"))
@@ -400,26 +420,26 @@ def _render_compact_label(
         fitted, font = _fit_text(
             draw,
             row_text,
-            max_width=width - (margin * 2),
+            max_width=content_w - 4,
             start_size=body_size + (1 if is_bold else 0),
             min_size=body_min_size,
             bold=is_bold,
         )
-        draw.text((margin, y), fitted, fill="black", font=font)
+        draw.text((x_left + 2, y), fitted, fill="black", font=font)
         y += line_h
 
-    y += max(4, int(height * 0.018))
+    y += max(4, int(height * 0.016))
     fields = ("Name", "Contact")
     field_gap = max(5, int(height * 0.02))
-    available = max(64, height - bottom_margin - y)
-    field_h = max(28, (available - field_gap * (len(fields) - 1)) // len(fields))
+    available = max(60, height - bottom_margin - y)
+    field_h = max(26, (available - field_gap * (len(fields) - 1)) // len(fields))
     field_font = _load_font(max(13, int(height * 0.068)), bold=True)
 
     for index, field in enumerate(fields):
         field_top = y + index * (field_h + field_gap)
         field_bottom = min(height - bottom_margin, field_top + field_h)
-        draw.rectangle((margin, field_top, width - margin, field_bottom), outline="black", width=2)
-        draw.text((margin + 6, field_top + max(3, int(field_h * 0.09))), f"{field}:", fill="black", font=field_font)
+        draw.rectangle((x_left, field_top, x_right, field_bottom), outline="black", width=2)
+        draw.text((x_left + 6, field_top + max(3, int(field_h * 0.09))), f"{field}:", fill="black", font=field_font)
 
 
 def render_label_image(

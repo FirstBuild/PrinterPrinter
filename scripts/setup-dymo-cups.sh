@@ -100,7 +100,9 @@ lpadmin -p "$QUEUE_NAME" -E \
     -v "$DEVICE_URI" \
     -m "$PPD_URI" \
     -o "PageSize=$PPD_PAGE_SIZE" \
-    -o "DymoPrintQuality=Graphics" \
+    -o "DymoHalftoning=Default" \
+    -o "Resolution=300dpi" \
+    -o "DymoPrintQuality=Text" \
     -o "printer-is-shared=false" \
     -o "printer-error-policy=abort-job"
 

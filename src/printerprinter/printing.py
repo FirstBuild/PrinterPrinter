@@ -393,7 +393,7 @@ class DymoPrintService:
         label_size: str,
         show_price: bool,
         price_per_gram: float,
-        print_quality: str = "Graphics",
+        print_quality: str = "Text",
         print_density: str = "Normal",
         job_expire_seconds: int = 300,
     ) -> None:
@@ -405,7 +405,7 @@ class DymoPrintService:
         self._label_size = label_size.strip() or "30336"
         self._show_price = show_price
         self._price_per_gram = price_per_gram
-        self._print_quality = _DYMO_QUALITY_MAP.get(print_quality.strip().lower(), "Graphics")
+        self._print_quality = _DYMO_QUALITY_MAP.get(print_quality.strip().lower(), "Text")
         self._print_density = _DYMO_DENSITY_MAP.get(print_density.strip().lower(), "Normal")
         self._job_expire_seconds = max(0, int(job_expire_seconds))
 
@@ -530,14 +530,6 @@ class DymoPrintService:
         if queue_state["out_of_paper"]:
             return PrintResult(ok=False, error="Dymo printer reports out of paper in CUPS")
 
-        if is_usb_target and int(queue_state.get("queued_jobs", 0)) == 0:
-            hw_status = query_dymo_usb_hardware_status()
-            if hw_status is not None:
-                if hw_status.get("paper_out"):
-                    return PrintResult(ok=False, error="Dymo printer is out of paper")
-                if hw_status.get("paper_jam"):
-                    return PrintResult(ok=False, error="Dymo printer reports a label jam")
-
         try:
             image = render_label_image(
                 event,
@@ -550,6 +542,7 @@ class DymoPrintService:
                 tmp_image_path = Path(tmpdir) / "label.png"
                 image.save(tmp_image_path, format="PNG", dpi=(300, 300))
 
+                resolution_opt = "300dpi" if self._print_quality == "Text" else "300x600dpi"
                 cmd = [
                     lp_path,
                     "-d",
@@ -557,7 +550,9 @@ class DymoPrintService:
                     "-o",
                     f"PageSize={spec.ppd_page_size}",
                     "-o",
-                    "fit-to-page",
+                    "DymoHalftoning=Default",
+                    "-o",
+                    f"Resolution={resolution_opt}",
                     "-o",
                     f"DymoPrintQuality={self._print_quality}",
                     "-o",
@@ -665,9 +660,11 @@ def probe_printer_status(settings: Settings) -> dict[str, object]:
     )
     resolved_queue, is_usb_target, queue_err = dymo_service.resolve_queue_name()
     queue_state = get_cups_queue_state(resolved_queue) if resolved_queue else None
+    # Avoid opening /dev/usb/lp0 via kernel usblp once CUPS owns the USB printer via libusb,
+    # as detaching/reattaching usblp between jobs can reset top-of-form reverse-feed state.
     hw_status = (
         query_dymo_usb_hardware_status()
-        if is_usb_target and usb_devices and (queue_state is None or int(queue_state.get("queued_jobs", 0)) == 0)
+        if is_usb_target and usb_devices and (queue_state is None or not queue_state.get("exists"))
         else None
     )
 
@@ -875,7 +872,11 @@ def setup_dymo_usb_cups_queue(
         "-o",
         f"PageSize={spec.ppd_page_size}",
         "-o",
-        "DymoPrintQuality=Graphics",
+        "DymoHalftoning=Default",
+        "-o",
+        "Resolution=300dpi",
+        "-o",
+        "DymoPrintQuality=Text",
         "-o",
         "printer-is-shared=false",
         "-o",

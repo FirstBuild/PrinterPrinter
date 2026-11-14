@@ -165,7 +165,6 @@ class DymoPrintServiceTests(unittest.TestCase):
         ppd_400t = _select_dymo_ppd_uri("LabelWriter-450-Turbo", "LabelWriter 400 Turbo")
         self.assertEqual(ppd_400t, "dymo:0/cups/model/lw400t.ppd")
 
-    @patch("printerprinter.printing.query_dymo_usb_hardware_status", return_value={"paper_out": False, "paper_jam": False, "ready": True})
     @patch(
         "printerprinter.printing.get_cups_queue_state",
         return_value={"exists": True, "enabled": True, "out_of_paper": False, "queued_jobs": 0, "summary": "idle"},
@@ -179,7 +178,6 @@ class DymoPrintServiceTests(unittest.TestCase):
         _mock_discover: MagicMock,
         _mock_usb: MagicMock,
         _mock_state: MagicMock,
-        _mock_hw: MagicMock,
     ) -> None:
         captured_cmd: list[str] = []
         captured_dpi: tuple[float, float] | None = None
@@ -200,7 +198,7 @@ class DymoPrintServiceTests(unittest.TestCase):
             label_size="30336",
             show_price=True,
             price_per_gram=0.10,
-            print_quality="Graphics",
+            print_quality="Text",
             print_density="Normal",
             job_expire_seconds=300,
         )
@@ -210,8 +208,10 @@ class DymoPrintServiceTests(unittest.TestCase):
         self.assertTrue(res.ok, res.error)
         self.assertIn("DYMO_LW400T", captured_cmd)
         self.assertIn("PageSize=w72h154.1", captured_cmd)
-        self.assertIn("fit-to-page", captured_cmd)
-        self.assertIn("DymoPrintQuality=Graphics", captured_cmd)
+        self.assertNotIn("fit-to-page", captured_cmd)
+        self.assertIn("DymoHalftoning=Default", captured_cmd)
+        self.assertIn("Resolution=300dpi", captured_cmd)
+        self.assertIn("DymoPrintQuality=Text", captured_cmd)
         self.assertIn("DymoPrintDensity=Normal", captured_cmd)
         self.assertIn("job-cancel-after=300", captured_cmd)
         self.assertIsNotNone(captured_dpi)
@@ -219,10 +219,9 @@ class DymoPrintServiceTests(unittest.TestCase):
         self.assertAlmostEqual(captured_dpi[0], 300, delta=1)
         self.assertAlmostEqual(captured_dpi[1], 300, delta=1)
 
-    @patch("printerprinter.printing.query_dymo_usb_hardware_status", return_value={"paper_out": True, "paper_jam": False, "ready": False})
     @patch(
         "printerprinter.printing.get_cups_queue_state",
-        return_value={"exists": True, "enabled": True, "out_of_paper": False, "queued_jobs": 0, "summary": "idle"},
+        return_value={"exists": True, "enabled": True, "out_of_paper": True, "queued_jobs": 0, "summary": "out-of-paper"},
     )
     @patch("printerprinter.printing.detect_dymo_usb_devices", return_value=[{"vendor_id": "0922", "product_id": "001a"}])
     @patch("printerprinter.printing.shutil.which", return_value="/usr/bin/lp")
@@ -231,7 +230,6 @@ class DymoPrintServiceTests(unittest.TestCase):
         _mock_which: MagicMock,
         _mock_usb: MagicMock,
         _mock_state: MagicMock,
-        _mock_hw: MagicMock,
     ) -> None:
         service = DymoPrintService(
             enabled=True,
